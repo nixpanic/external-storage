@@ -44,6 +44,7 @@ const (
 	dynamicEpSvcPrefix        = "gluster-subvol-dynamic-"
 	glusterTypeAnn            = "gluster.org/type"
 	gidAnn                    = "pv.beta.kubernetes.io/gid"
+	workdir                   = "/var/run/gluster-subvol"
 
 	// CloneRequestAnn is an annotation to request that the PVC be provisioned as a clone of the referenced PVC
 	CloneRequestAnn = "k8s.io/CloneRequest"
@@ -55,19 +56,7 @@ const (
 type glusterSubvolProvisioner struct {
 	client   kubernetes.Interface
 	identity string
-	provisionerConfig
 	allocator gidallocator.Allocator
-	options   controller.VolumeOptions
-}
-
-type provisionerConfig struct {
-	// the supervol is used to get details for mounting
-	pvc             *v1.PersistentVolumeClaim
-	pv              *v1.PersistentVolume
-	mountpoint      string
-	subvolPrefix    string
-	gidMin          int
-	gidMax          int
 }
 
 var _ controller.Provisioner = &glusterSubvolProvisioner{}
@@ -84,11 +73,6 @@ func newGlusterSubvolProvisioner(client kubernetes.Interface, id string) (contro
 		client:    client,
 		identity:  id,
 		allocator: gidallocator.New(client),
-	}
-
-	err := p.parseClassParameters()
-	if err != nil {
-		return nil, err
 	}
 
 	return p, nil
@@ -133,10 +117,14 @@ func (p *glusterSubvolProvisioner) Provision(options controller.VolumeOptions) (
 		return nil, fmt.Errorf("invalid AccessModes %v: only AccessModes %v are supported", options.PVC.Spec.AccessModes, accessModes)
 	}
 
-	glog.V(1).Infof("VolumeOptions %v", options)
+	var supervolNS, supervolPVCName string
 	gidAllocate := true
 	for k, v := range options.Parameters {
 		switch strings.ToLower(k) {
+		case "namespace":
+			supervolNS = v
+		case "pvc":
+			supervolPVCName = v
 		case "gidmin":
 		// Let allocator handle
 		case "gidmax":
@@ -150,6 +138,28 @@ func (p *glusterSubvolProvisioner) Provision(options controller.VolumeOptions) (
 		}
 	}
 
+	if (len(supervolPVCName) == 0) {
+		return nil, fmt.Errorf("pvc is a required options for volume plugin %s", provisionerName)
+	}
+
+	// get the PVC that has been configured
+	supervolPVC, err := p.getPVC(supervolNS, supervolPVCName)
+	if err != nil {
+		return nil, fmt.Errorf("could not find pvc %s in namespace %s", supervolPVCName, supervolNS)
+	}
+
+	// check permission mode, the PV should be RWX as it is mounted here,
+	// and we'll create subdirs as new PVCs
+	if !util.AccessModesContains(supervolPVC.Spec.AccessModes, v1.ReadWriteMany) {
+		return nil, fmt.Errorf("this provisioner requires the PVC %s/%s to have ReadWriteMany permissions", supervolNS, supervolPVCName)
+	}
+
+	// based on the PVC we can get the PV
+	supervolPV, err := p.client.CoreV1().PersistentVolumes().Get(supervolPVC.Spec.VolumeName, metav1.GetOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("could not find PV for PVC %s/%s", supervolNS, supervolPVCName)
+	}
+
 	var gid *int
 	if gidAllocate {
 		allocate, err := p.allocator.AllocateNext(options)
@@ -160,6 +170,8 @@ func (p *glusterSubvolProvisioner) Provision(options controller.VolumeOptions) (
 	}
 	glog.V(1).Infof("Allocated GID %d for PVC %s", *gid, options.PVC.Name)
 
+
+	// TODO: mount sourcePVC on workdir/sourcePVCName
 
 	/* TODO:
 	 * - set quota for the size
@@ -175,7 +187,8 @@ func (p *glusterSubvolProvisioner) Provision(options controller.VolumeOptions) (
 	// the request to clone can fallback to other cloning/copying in case
 	// the CloneRequest annotation was ignored/unknown.
 
-	destDir := p.mountpoint+"/"+options.PVC.Namespace+"/"+options.PVC.Name
+	// full path of the directory for the new PV
+	destDir := workdir+"/"+supervolPV.Name+"/"+options.PVC.Namespace+"/"+options.PVC.Name
 
 	// sourcePVCRef points to the PVC that should get cloned
 	// is sourcePVCRef is (still) set, a CloneOf annotation in the new PVC will be added
@@ -195,8 +208,6 @@ func (p *glusterSubvolProvisioner) Provision(options controller.VolumeOptions) (
 			return nil, fmt.Errorf("failed to parse namespace/pvc from %s", sourcePVCRef)
 		}
 
-		// TODO: sourcePVCRef needs to be on the same Gluster volume
-
 		// TODO: check if the size of the PVC >= source
 
 		// TODO: where is the CloneOf mounted? Add to sourceDir/destDir
@@ -208,16 +219,16 @@ func (p *glusterSubvolProvisioner) Provision(options controller.VolumeOptions) (
 		// TODO: get the sourcePV from the sourcePVC
 		sourcePV, err := p.client.CoreV1().PersistentVolumes().Get(sourcePVC.Spec.VolumeName, metav1.GetOptions{})
 		if err != nil {
-			return nil, fmt.Errorf("could not find PV %s for PVC %s", sourcePVC.Spec.VolumeName, sourcePVCName)
+			return nil, fmt.Errorf("could not find PV %s for PVC %s/%s", sourcePVC.Spec.VolumeName, sourceNS, sourcePVCName)
 		}
 
 		// TODO: how to find out the type of the PV?
-		sourceDir := p.mountpoint+"/"+sourcePV.Spec.Glusterfs.Path
+		sourceDir := workdir+"/"+supervolPV.Name+"/"+sourcePV.Spec.Glusterfs.Path
 
-		// verify that the sourcePVC is on the p.pv
+		// verify that the sourcePVC is on the supervolPVC
 		st, err := os.Stat(sourceDir)
 		if err != nil || !st.Mode().IsDir() {
-			return nil, fmt.Errorf("failed to clone %s, path does not exist on PVC %s", sourcePVCRef, p.pvc.Name)
+			return nil, fmt.Errorf("failed to clone %s, path does not exist on PVC %s/%s", sourcePVCRef, supervolNS, supervolPVCName)
 		}
 
 		// verification has been done!
@@ -252,8 +263,8 @@ func (p *glusterSubvolProvisioner) Provision(options controller.VolumeOptions) (
 	glusterfs := &v1.GlusterfsVolumeSource{
 		// TODO: we'll reuse the existing endpoint for now, needs to be
 		// one in the right namespace, use: ep := Endpoints.DeepCopy()
-		EndpointsName: p.pv.Spec.Glusterfs.EndpointsName,
-		Path:          p.pv.Spec.Glusterfs.Path+"/"+options.PVC.Namespace+"/"+options.PVC.Name,
+		EndpointsName: supervolPV.Spec.Glusterfs.EndpointsName,
+		Path:          supervolPV.Spec.Glusterfs.Path+"/"+options.PVC.Namespace+"/"+options.PVC.Name,
 		ReadOnly:      false,
 	}
 
@@ -301,7 +312,7 @@ func (p *glusterSubvolProvisioner) Delete(volume *v1.PersistentVolume) error {
 		return err
 	}
 
-	err = os.RemoveAll(p.mountpoint+"/"+volume.Spec.Glusterfs.Path)
+	err = os.RemoveAll(workdir+"/"+volume.Spec.Glusterfs.Path)
 	if err != nil {
 		glog.Errorf("error when deleting PV %s: %s", volume.Name, err)
 		return err
@@ -312,56 +323,6 @@ func (p *glusterSubvolProvisioner) Delete(volume *v1.PersistentVolume) error {
 	return nil
 }
 
-
-// Create a provisionerConfig based on the parameters set in the StorageClass
-func (p *glusterSubvolProvisioner) parseClassParameters() error {
-	var err error
-	var ns, pvc string
-
-	for k, v := range p.options.Parameters {
-		switch strings.ToLower(k) {
-		case "namespace":
-			ns = v
-		case "pvc":
-			pvc = v
-		case "mountpoint":
-			p.mountpoint = v
-		case "subvolprefix":
-			p.subvolPrefix = v
-		case "gidmin":
-		case "gidmax":
-		case "smartclone":
-		default:
-			return fmt.Errorf("invalid option %q for volume plugin %s", k, provisionerName)
-		}
-	}
-
-	if (len(pvc) == 0) {
-		return fmt.Errorf("pvc is a required options for volume plugin %s", provisionerName)
-	}
-
-	// get the PVC that has been configured
-	p.pvc, err = p.getPVC(ns, pvc)
-	if err != nil {
-		return fmt.Errorf("could not find pvc %s in namespace %s", pvc, ns)
-	}
-
-	// check permission mode, the PV should be RWX as it is mounted here,
-	// and we'll create subdirs as new PVCs
-	if !util.AccessModesContains(p.pvc.Spec.AccessModes, v1.ReadWriteMany) {
-		return fmt.Errorf("this provisioner requires the PVC %s/%s to have ReadWriteMany permissions", ns, pvc)
-	}
-
-	// based on the PVC we can get the PV
-	p.pv, err = p.client.CoreV1().PersistentVolumes().Get(p.pvc.Spec.VolumeName, metav1.GetOptions{})
-	if err != nil {
-		return fmt.Errorf("could not find pv %s", p.pvc.Spec.VolumeName)
-	}
-
-	// TODO: verify that the PV is of tyle 'glusterfs'
-
-	return nil
-}
 
 var (
 	master     = flag.String("master", "", "Master URL")
