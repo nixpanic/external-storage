@@ -1,0 +1,32 @@
+---
+kind: PersistentVolumeClaim
+apiVersion: v1
+metadata:
+  name: supervol
+  annotations:
+    volume.beta.kubernetes.io/storage-class: "glusterfile"
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 64Gi
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: gluster-subvol-provisioner
+spec:
+  containers:
+    env:
+      name: PROVISIONER_NAME
+      value: gluster.org/gluster-subvolfile
+    image: "quay.io/external_storage/gluster-subvolfile-provisioner:latest"
+    name: gluster-subvolfile-provisioner
+    volumeMounts:
+    - name: supervol
+      mountPath: /srv/supervol
+  volumes:
+  - name: supervol
+    persistentVolumeClaim:
+      claimName: supervol
