@@ -54,9 +54,10 @@ const (
 )
 
 type glusterSubvolProvisioner struct {
-	client   kubernetes.Interface
-	identity string
+	client    kubernetes.Interface
+	identity  string
 	allocator gidallocator.Allocator
+	mtab     map[string]string
 }
 
 var _ controller.Provisioner = &glusterSubvolProvisioner{}
@@ -104,6 +105,85 @@ func (p *glusterSubvolProvisioner) annotatePVC(ns string, name string, updates m
 		return retryErr
 	}
 	return nil
+}
+
+
+// mount the given PV if not mounted yet, return the mountpoint or an error
+func (p *glusterSubvolProvisioner) mountPV(ns string, pv *v1.PersistentVolume) (string, error) {
+	// check if not mounted yet
+	mountpoint, mounted := p.mtab[pv.Name]
+	if mounted {
+		// mounted already
+		return mountpoint, nil
+	}
+
+	// create the missing mountpoint
+	mountpoint = workdir+"/"+pv.Name
+	sb, err := os.Stat(mountpoint)
+	if err != nil {
+		// mountpoint does not exist yet, create it
+		glog.Infof("mountpoint %s for PV %s does not exist yet? Error: %s", mountpoint, pv.Name, err)
+
+		err = os.MkdirAll(mountpoint, 0775)
+		if err != nil {
+			return "", fmt.Errorf("failed to creat mountpoint %s for PV %s: %s", mountpoint, pv.Name, err)
+		}
+	} else if !sb.Mode().IsDir() {
+		// mountpoint should be a directory, but it is not?!
+		return "", fmt.Errorf("mountpoint %s for PV %s is not a directory?", mountpoint, pv.Name)
+	}
+
+	// get the name of the supervol to mount
+	supervol := pv.Spec.Glusterfs.Path
+
+	// get the mount options for the supervol
+	var mountOpts string
+	if len(pv.Spec.MountOptions) != 0 {
+		mountOpts = strings.Join(pv.Spec.MountOptions, ",")
+	}
+
+	// Gluster Storage servers
+	ep, err := p.client.CoreV1().Endpoints(ns).Get(pv.Spec.Glusterfs.EndpointsName, metav1.GetOptions{})
+	if err != nil {
+		return "", fmt.Errorf("endpoint %s for PV %s count not be found: %s", pv.Spec.Glusterfs.EndpointsName, pv.Name, err)
+	}
+
+	// add the additional servers as backup-volfile-servers to the mountOpts
+	if len(ep.Subsets[0].Addresses) > 1 {
+		var backupVolfileServers string
+		for _, addr := range ep.Subsets[0].Addresses[1:] {
+			if backupVolfileServers != "" {
+				backupVolfileServers = backupVolfileServers+":"
+			}
+			backupVolfileServers = backupVolfileServers+addr.IP
+		}
+
+		if mountOpts != "" {
+			mountOpts = mountOpts+","
+		}
+		mountOpts = mountOpts+"backup-volfile-servers="+backupVolfileServers
+	}
+
+	// don't forget the "-o" option before the mount options string
+	if mountOpts != "" {
+		mountOpts = "-o "+mountOpts
+	}
+	mountSource := fmt.Sprintf("%s:%s", ep.Subsets[0].Addresses[0].IP, supervol)
+	mountCmd := strings.Split(fmt.Sprintf("/bin/mount -t glusterfs %s %s %s", mountOpts, mountSource, mountpoint), " ")
+	glog.Infof("going to mount supervol %s for PV %s: %s", supervol, pv.Name, mountCmd)
+	proc, err := os.StartProcess(mountCmd[0], mountCmd[1:], &os.ProcAttr{})
+	if err != nil {
+		glog.Errorf("failed to mount supervol %s: %s", supervol, err)
+		return "", err
+	}
+
+	_, err = proc.Wait()
+	if err != nil {
+		glog.Errorf("failed to mount supervol %s: %s", supervol, err)
+		return "", err
+	}
+
+	return mountpoint, nil
 }
 
 
@@ -171,7 +251,11 @@ func (p *glusterSubvolProvisioner) Provision(options controller.VolumeOptions) (
 	glog.V(1).Infof("Allocated GID %d for PVC %s", *gid, options.PVC.Name)
 
 
-	// TODO: mount sourcePVC on workdir/sourcePVCName
+	// mount the supervolPV
+	mountpoint, err := p.mountPV(supervolNS, supervolPV)
+	if err != nil {
+		return nil, fmt.Errorf("failed to mount PV %s: %s", supervolPV, err)
+	}
 
 	/* TODO:
 	 * - set quota for the size
@@ -188,7 +272,7 @@ func (p *glusterSubvolProvisioner) Provision(options controller.VolumeOptions) (
 	// the CloneRequest annotation was ignored/unknown.
 
 	// full path of the directory for the new PV
-	destDir := workdir+"/"+supervolPV.Name+"/"+options.PVC.Namespace+"/"+options.PVC.Name
+	destDir := mountpoint+"/"+options.PVC.Namespace+"/"+options.PVC.Name
 
 	// sourcePVCRef points to the PVC that should get cloned
 	// is sourcePVCRef is (still) set, a CloneOf annotation in the new PVC will be added
@@ -223,7 +307,7 @@ func (p *glusterSubvolProvisioner) Provision(options controller.VolumeOptions) (
 		}
 
 		// TODO: how to find out the type of the PV?
-		sourceDir := workdir+"/"+supervolPV.Name+"/"+sourcePV.Spec.Glusterfs.Path
+		sourceDir := mountpoint+"/"+sourceNS+"/"+sourcePV.Spec.Glusterfs.Path
 
 		// verify that the sourcePVC is on the supervolPVC
 		st, err := os.Stat(sourceDir)
@@ -249,10 +333,9 @@ func (p *glusterSubvolProvisioner) Provision(options controller.VolumeOptions) (
 
 	// No CloneRequest annotation, or cloning failed. Create a new empty subdir.
 	if sourcePVCRef == "" {
-		err := os.Mkdir(destDir, 0770)
-		// TODO: handle error
+		err := os.MkdirAll(destDir, 0775)
 		if err != nil {
-			return nil, fmt.Errorf("Failed to create subdir for new pvc %v: ", options.PVC.Name, err)
+			return nil, fmt.Errorf("Failed to create subdir for new pvc %s: %s", options.PVC.Name, err)
 		}
 		glog.V(1).Infof("successfully created Gluster Subvol %+v with size and volID", destDir)
 	}
@@ -387,4 +470,6 @@ func main() {
 		serverVersion.GitVersion,
 	)
 	pc.Run(wait.NeverStop)
+
+	// TODO: unmount the glusterSubvolProvisioner.mtab entries
 }
