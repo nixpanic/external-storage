@@ -1,32 +1,86 @@
 ---
-kind: PersistentVolumeClaim
-apiVersion: v1
-metadata:
-  name: supervol
-  annotations:
-    volume.beta.kubernetes.io/storage-class: "glusterfile"
-spec:
-  accessModes:
-    - ReadWriteMany
-  resources:
-    requests:
-      storage: 64Gi
----
-apiVersion: v1
-kind: Pod
+kind: ClusterRole
+apiVersion: rbac.authorization.k8s.io/v1
 metadata:
   name: gluster-subvol-provisioner
+rules:
+  - apiGroups: [""]
+    resources: ["persistentvolumes"]
+    verbs: ["get", "list", "watch", "create", "delete"]
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get", "list", "watch", "update"]
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["storageclasses"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["list", "watch", "create", "update", "patch"]
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get","create","delete"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get"]
+  - apiGroups: [""]
+    resources: ["routes"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["endpoints"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  namespace: storage-gluster
+  name: gluster-subvol-provisioner
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: gluster-subvol-provisioner
+roleRef:
+  kind: ClusterRole
+  name: gluster-subvol-provisioner
+  apiGroup: rbac.authorization.k8s.io
+subjects:
+- kind: ServiceAccount
+  namespace: storage-gluster
+  name: gluster-subvol-provisioner
+---
+kind: Deployment
+apiVersion: extensions/v1beta1
+metadata:
+  namespace: storage-gluster
+  name: gluster-subvol-provisioner
+  annotations:
+    description: Defines how to deploy the glusterfile provisioner pod.
 spec:
-  containers:
-    env:
-      name: PROVISIONER_NAME
-      value: gluster.org/gluster-subvolfile
-    image: "quay.io/external_storage/gluster-subvolfile-provisioner:latest"
-    name: gluster-subvolfile-provisioner
-    volumeMounts:
-    - name: supervol
-      mountPath: /srv/supervol
-  volumes:
-  - name: supervol
-    persistentVolumeClaim:
-      claimName: supervol
+  replicas: 1
+  selector:
+    matchLabels:
+      k8s-app: storage-provisioner-gluster
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      namespace: storage-gluster
+      name: gluster-subvol-provisioner
+      labels:
+        k8s-app: storage-provisioner-gluster
+    spec:
+      serviceAccountName: gluster-subvol-provisioner
+      containers:
+      - name: gluster-subvol-provisioner
+        image: docker-registry.engineering.redhat.com/ndevos/gluster-subvol-provisioner:latest
+        imagePullPolicy: Always
+        volumeMounts:
+        - name: gluster-subvol-dev-fuse
+          mountPath: /dev/fuse
+        securityContext:
+          capabilities: {}
+          privileged: true
+      volumes:
+      - name: gluster-subvol-dev-fuse
+        hostPath:
+          path: /dev/fuse
