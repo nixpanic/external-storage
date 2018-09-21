@@ -43,6 +43,7 @@ const (
 	descAnn                   = "Gluster-subvol: Dynamically provisioned PV"
 	dynamicEpSvcPrefix        = "gluster-subvol-dynamic-"
 	glusterTypeAnn            = "gluster.org/type"
+	parentPVCAnn              = "gluster.org/parentpvc"
 	gidAnn                    = "pv.beta.kubernetes.io/gid"
 	workdir                   = "/var/run/gluster-subvol"
 
@@ -370,6 +371,7 @@ func (p *glusterSubvolProvisioner) Provision(options controller.VolumeOptions) (
 			Annotations: map[string]string{
 				gidAnn:                   strconv.FormatInt(int64(*gid), 10),
 				glusterTypeAnn:           "subvol",
+				parentPVCAnn:             supervolNS+"/"+supervolPVC.Name,
 				"Description":            descAnn,
 				v1.MountOptionAnnotation: "", // TODO: get mount options from PVC
 			},
@@ -386,21 +388,57 @@ func (p *glusterSubvolProvisioner) Provision(options controller.VolumeOptions) (
 }
 
 
-func (p *glusterSubvolProvisioner) Delete(volume *v1.PersistentVolume) error {
-
-	glog.V(1).Infof("deleting volume, path %s", volume.Spec.Glusterfs.Path)
-
-	err := p.allocator.Release(volume)
+func (p *glusterSubvolProvisioner) Delete(pv *v1.PersistentVolume) error {
+	// return the uid/gid back to the pool
+	err := p.allocator.Release(pv)
 	if err != nil {
 		return err
 	}
 
-	err = os.RemoveAll(workdir+"/"+volume.Spec.Glusterfs.Path)
+	// need to get the supervol where this PV lives
+	parentPVC, ok := pv.ObjectMeta.Annotations[parentPVCAnn]
+	if !ok {
+		return fmt.Errorf("missing %s annotation in PV %s, can not delete the PV", parentPVC, pv.Name)
+	}
+
+	// the parentPVCAnn is in the format <namespace>/<pvc>
+	parts := strings.Split(parentPVC, "/")
+	if len(parts) != 2 {
+		return fmt.Errorf("failed to parse annotation %s:%s for PV %s, can not delete the PV", parentPVCAnn, parentPVC, pv.Name)
+	}
+
+	supervolNS := parts[0]
+	supervolPVC, err := p.getPVC(supervolNS, parts[1])
 	if err != nil {
-		glog.Errorf("error when deleting PV %s: %s", volume.Name, err)
+		return fmt.Errorf("failed to find supervol PVC %s: %s", parentPVC, err)
+	}
+
+	supervolPV, err := p.client.CoreV1().PersistentVolumes().Get(supervolPVC.Spec.VolumeName, metav1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("could not find PV for PVC %s/%s, can not delete PV %s: %s", supervolNS, supervolPVC.Name, pv.Name, err)
+	}
+
+	// in case the provisioner restarted, the supervol needs to get mounted again
+	mountpoint, err := p.mountPV(supervolNS, supervolPV)
+	if err != nil {
+		return fmt.Errorf("failed to mount supervol PVC %s: %s", parentPVC, err)
+	}
+
+	subvolPath := pv.Spec.ClaimRef.Namespace+"/"+pv.Spec.ClaimRef.Name
+
+	glog.V(1).Infof("deleting volume, path %s", subvolPath)
+
+	_, err = os.Stat(mountpoint+"/"+subvolPath)
+	if err != nil {
+		return fmt.Errorf("path %s for PV %s does not exist: %s", subvolPath, pv.Name, err)
+	}
+
+	err = os.RemoveAll(mountpoint+"/"+subvolPath)
+	if err != nil {
+		glog.Errorf("error when deleting PV %s: %s", pv.Name, err)
 		return err
 	}
-	glog.V(2).Infof("PV %s deleted successfully", volume.Name)
+	glog.V(2).Infof("PV %s deleted successfully", pv.Name)
 
 	// TODO: no need to delete the endpoint, it is shared with this provisioner (always?)
 	return nil
