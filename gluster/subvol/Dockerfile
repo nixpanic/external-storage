@@ -3,10 +3,9 @@ FROM centos:latest
 LABEL maintainer="Niels de Vos <ndevos@redhat,com>"
 
 # install glusterfs-fuse to make mounting possible
-RUN yum -y install centos-release-gluster && yum -y install glusterfs-fuse
-
-# cleanup
-RUN yum --enablerepo=* clean all
+RUN yum -y install centos-release-gluster && yum -y install glusterfs-fuse && \
+    yum --enablerepo=* clean all && \
+    true
 
 ADD cmd/gluster-subvol-provisioner/gluster-subvol-provisioner /usr/local/sbin/gluster-subvol-provisioner
 
