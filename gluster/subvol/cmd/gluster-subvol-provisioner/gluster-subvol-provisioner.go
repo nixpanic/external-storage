@@ -20,6 +20,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 
@@ -75,6 +76,7 @@ func newGlusterSubvolProvisioner(client kubernetes.Interface, id string) (contro
 		client:    client,
 		identity:  id,
 		allocator: gidallocator.New(client),
+		mtab:	   make(map[string]string),
 	}
 
 	return p, nil
@@ -165,24 +167,35 @@ func (p *glusterSubvolProvisioner) mountPV(ns string, pv *v1.PersistentVolume) (
 		mountOpts = mountOpts+"backup-volfile-servers="+backupVolfileServers
 	}
 
+	mountCmd := make([]string, 0, 7)
+	mountCmd = append(mountCmd, "/bin/mount", "-t", "glusterfs")
+
 	// don't forget the "-o" option before the mount options string
 	if mountOpts != "" {
 		mountOpts = "-o "+mountOpts
+		mountCmd = append(mountCmd, "-o", mountOpts)
 	}
+
 	mountSource := fmt.Sprintf("%s:%s", ep.Subsets[0].Addresses[0].IP, supervol)
-	mountCmd := strings.Split(fmt.Sprintf("/bin/mount -t glusterfs %s %s %s", mountOpts, mountSource, mountpoint), " ")
+
+	mountCmd = append(mountCmd, mountSource, mountpoint)
 	glog.Infof("going to mount supervol %s for PV %s: %s", supervol, pv.Name, mountCmd)
-	proc, err := os.StartProcess(mountCmd[0], mountCmd[1:], &os.ProcAttr{})
+
+	// os.StartProcess() does not allow deamons (fuse) to continue, using
+	// exec.Command instead.
+	cmd := exec.Command(mountCmd[0], mountCmd[1:]...)
+	err = cmd.Start()
 	if err != nil {
 		glog.Errorf("failed to mount supervol %s: %s", supervol, err)
 		return "", err
 	}
 
-	_, err = proc.Wait()
+	err = cmd.Wait()
 	if err != nil {
-		glog.Errorf("failed to mount supervol %s: %s", supervol, err)
-		return "", err
+		return "", fmt.Errorf("failed to mount supervol %s, process exited with %v", supervol, err)
 	}
+
+	p.mtab[pv.Name] = mountpoint
 
 	return mountpoint, nil
 }
@@ -344,8 +357,16 @@ func (p *glusterSubvolProvisioner) Provision(options controller.VolumeOptions) (
 	// TODO: need to os.Chgrp() w/ new gid for all files? Should be done by mount process.
 	// TODO: set quota? Not possible through standard tools, only gluster CLI?
 
+	// Need to copy the endpoints from the supervol to the new PVC. A
+	// reference of the endpoints name is not sufficient, it can be in an
+	// other namespace.
+//	ep, err := p.client.CoreV1().Endpoints(options.PVC.Namespace).Get(supervolPV.Spec.Glusterfs.EndpointsName, metav1.GetOptions{})
+//	if err != nil {
+//		return nil, fmt.Errorf("endpoint %s for supervol PV %s can not be found: %s", supervolPV.Spec.Glusterfs.EndpointsName, supervolPV.Name, err)
+//	}
+
 	glusterfs := &v1.GlusterfsVolumeSource{
-		// TODO: we'll reuse the existing endpoint for now, needs to be
+		// TODO: need to create a new endpoint, copy the one from the supervol into the namespace of the pvc
 		// one in the right namespace, use: ep := Endpoints.DeepCopy()
 		EndpointsName: supervolPV.Spec.Glusterfs.EndpointsName,
 		Path:          supervolPV.Spec.Glusterfs.Path+"/"+options.PVC.Namespace+"/"+options.PVC.Name,
@@ -356,6 +377,7 @@ func (p *glusterSubvolProvisioner) Provision(options controller.VolumeOptions) (
 	pvc := v1.PersistentVolumeSpec{
 		PersistentVolumeReclaimPolicy: options.PersistentVolumeReclaimPolicy,
 		AccessModes:                   options.PVC.Spec.AccessModes,
+		MountOptions:                  supervolPV.Spec.MountOptions,
 		VolumeMode:                    &mode,
 		Capacity: v1.ResourceList{
 			v1.ResourceName(v1.ResourceStorage): options.PVC.Spec.Resources.Requests[v1.ResourceName(v1.ResourceStorage)],
@@ -365,7 +387,6 @@ func (p *glusterSubvolProvisioner) Provision(options controller.VolumeOptions) (
 		},
 	}
 
-	mountOpts, _ := supervolPV.ObjectMeta.Annotations[v1.MountOptionAnnotation]
 	pv := &v1.PersistentVolume{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: options.PVName,
@@ -374,7 +395,6 @@ func (p *glusterSubvolProvisioner) Provision(options controller.VolumeOptions) (
 				glusterTypeAnn:           "subvol",
 				parentPVCAnn:             supervolNS+"/"+supervolPVC.Name,
 				"Description":            descAnn,
-				v1.MountOptionAnnotation: mountOpts,
 			},
 		},
 		Spec: pvc,
@@ -431,17 +451,17 @@ func (p *glusterSubvolProvisioner) Delete(pv *v1.PersistentVolume) error {
 
 	_, err = os.Stat(mountpoint+"/"+subvolPath)
 	if err != nil {
-		return fmt.Errorf("path %s for PV %s does not exist: %s", subvolPath, pv.Name, err)
-	}
-
-	err = os.RemoveAll(mountpoint+"/"+subvolPath)
-	if err != nil {
-		glog.Errorf("error when deleting PV %s: %s", pv.Name, err)
-		return err
+		glog.Errorf("path %s for PV %s does not exist, marking deletion successful: %s", subvolPath, pv.Name, err)
+	} else {
+		err = os.RemoveAll(mountpoint+"/"+subvolPath)
+		if err != nil {
+			glog.Errorf("error when deleting PV %s: %s", pv.Name, err)
+			return err
+		}
 	}
 	glog.V(2).Infof("PV %s deleted successfully", pv.Name)
 
-	// TODO: no need to delete the endpoint, it is shared with this provisioner (always?)
+	// TODO: need to delete the endpoint
 	return nil
 }
 
