@@ -365,6 +365,7 @@ func (p *glusterSubvolProvisioner) Provision(options controller.VolumeOptions) (
 		},
 	}
 
+	mountOpts, _ := supervolPV.ObjectMeta.Annotations[v1.MountOptionAnnotation]
 	pv := &v1.PersistentVolume{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: options.PVName,
@@ -373,7 +374,7 @@ func (p *glusterSubvolProvisioner) Provision(options controller.VolumeOptions) (
 				glusterTypeAnn:           "subvol",
 				parentPVCAnn:             supervolNS+"/"+supervolPVC.Name,
 				"Description":            descAnn,
-				v1.MountOptionAnnotation: "", // TODO: get mount options from PVC
+				v1.MountOptionAnnotation: mountOpts,
 			},
 		},
 		Spec: pvc,
