@@ -32,6 +32,7 @@ import (
 	"k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -202,6 +203,14 @@ func (p *glusterSubvolProvisioner) mountPV(ns string, pv *v1.PersistentVolume) (
 }
 
 
+func (p *glusterSubvolProvisioner) makeSubvolPath(mountpoint, pvcNS string, pvcUID types.UID) string {
+	return fmt.Sprintf("%s/%s/pvc-%s", mountpoint, pvcNS, pvcUID)
+}
+
+func (p *glusterSubvolProvisioner) makeMountPath(supervolPV *v1.PersistentVolume, pvcNS string, pvcUID types.UID) string {
+	return fmt.Sprintf("%s/%s/pvc-%s", supervolPV.Spec.Glusterfs.Path, pvcNS, pvcUID)
+}
+
 func (p *glusterSubvolProvisioner) copyEndpoints(sourceNS string, sourcePV *v1.PersistentVolume, destNS string, destPVCName string) (*v1.Endpoints, error) {
 	// Need to copy the endpoints from the supervol to the new PVC. A
 	// reference of the endpoints name is not sufficient, it can be in an
@@ -317,7 +326,7 @@ func (p *glusterSubvolProvisioner) Provision(options controller.VolumeOptions) (
 	// the CloneRequest annotation was ignored/unknown.
 
 	// full path of the directory for the new PV
-	destDir := mountpoint+"/"+options.PVC.Namespace+"/"+options.PVC.Name
+	destDir := p.makeSubvolPath(mountpoint, options.PVC.Namespace, options.PVC.UID)
 
 	// sourcePVCRef points to the PVC that should get cloned
 	// is sourcePVCRef is (still) set, a CloneOf annotation in the new PVC will be added
@@ -326,7 +335,7 @@ func (p *glusterSubvolProvisioner) Provision(options controller.VolumeOptions) (
 		// sourcePVCRef is like (namespace/)?pvc
 		var sourceNS, sourcePVCName string
 
-		parts := strings.Split("/", sourcePVCRef)
+		parts := strings.Split(sourcePVCRef, "/")
 		if len(parts) == 1 {
 			sourceNS = options.PVC.Namespace
 			sourcePVCName = parts[0]
@@ -340,19 +349,19 @@ func (p *glusterSubvolProvisioner) Provision(options controller.VolumeOptions) (
 		// TODO: check if the size of the PVC >= source
 
 		// TODO: where is the CloneOf mounted? Add to sourceDir/destDir
-		sourcePVC, err := p.getPVC(sourcePVCName, sourceNS)
+		sourcePVC, err := p.getPVC(sourceNS, sourcePVCName)
 		if err != nil {
-			return nil, fmt.Errorf("failed to find PVC %s/%s:", sourceNS, sourcePVCName, err)
+			return nil, fmt.Errorf("failed to find PVC %s/%s: %s", sourceNS, sourcePVCName, err)
 		}
 
-		// TODO: get the sourcePV from the sourcePVC
-		sourcePV, err := p.client.CoreV1().PersistentVolumes().Get(sourcePVC.Spec.VolumeName, metav1.GetOptions{})
-		if err != nil {
-			return nil, fmt.Errorf("could not find PV %s for PVC %s/%s", sourcePVC.Spec.VolumeName, sourceNS, sourcePVCName)
-		}
+		// TODO: get the sourcePV from the sourcePVC and verify subdir for sourceDir
+		//sourcePV, err := p.client.CoreV1().PersistentVolumes().Get(sourcePVC.Spec.VolumeName, metav1.GetOptions{})
+		//if err != nil {
+		//	return nil, fmt.Errorf("could not find PV %s for PVC %s/%s", sourcePVC.Spec.VolumeName, sourceNS, sourcePVCName)
+		//}
 
 		// TODO: how to find out the type of the PV?
-		sourceDir := mountpoint+"/"+sourceNS+"/"+sourcePV.Spec.Glusterfs.Path
+		sourceDir := p.makeSubvolPath(mountpoint, sourceNS, sourcePVC.UID)
 
 		// verify that the sourcePVC is on the supervolPVC
 		st, err := os.Stat(sourceDir)
@@ -398,8 +407,7 @@ func (p *glusterSubvolProvisioner) Provision(options controller.VolumeOptions) (
 
 	glusterfs := &v1.GlusterfsVolumeSource{
 		EndpointsName: ep.ObjectMeta.Name,
-		// Path is in the format of <volumename>/<namespace>/<pvcname>, allows mounting
-		Path:          supervolPV.Spec.Glusterfs.Path+"/"+options.PVC.Namespace+"/"+options.PVC.Name,
+		Path:          p.makeMountPath(supervolPV, options.PVC.Namespace, options.PVC.UID),
 		ReadOnly:      false,
 	}
 
@@ -481,15 +489,15 @@ func (p *glusterSubvolProvisioner) Delete(pv *v1.PersistentVolume) error {
 		return fmt.Errorf("failed to mount supervol PVC %s: %s", parentPVC, err)
 	}
 
-	subvolPath := pv.Spec.ClaimRef.Namespace+"/"+pv.Spec.ClaimRef.Name
+	subvolPath := p.makeSubvolPath(mountpoint, pv.Spec.ClaimRef.Namespace, pv.Spec.ClaimRef.UID)
 
 	glog.V(1).Infof("deleting volume, path %s", subvolPath)
 
-	_, err = os.Stat(mountpoint+"/"+subvolPath)
+	_, err = os.Stat(subvolPath)
 	if err != nil {
 		glog.Errorf("path %s for PV %s does not exist, marking deletion successful: %s", subvolPath, pv.Name, err)
 	} else {
-		err = os.RemoveAll(mountpoint+"/"+subvolPath)
+		err = os.RemoveAll(subvolPath)
 		if err != nil {
 			glog.Errorf("error when deleting PV %s: %s", pv.Name, err)
 			return err
