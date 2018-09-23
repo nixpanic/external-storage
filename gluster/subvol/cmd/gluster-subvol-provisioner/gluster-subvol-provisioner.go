@@ -31,6 +31,7 @@ import (
 	"github.com/kubernetes-sigs/sig-storage-lib-external-provisioner/util"
 	"k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -201,6 +202,36 @@ func (p *glusterSubvolProvisioner) mountPV(ns string, pv *v1.PersistentVolume) (
 }
 
 
+func (p *glusterSubvolProvisioner) copyEndpoints(sourceNS string, sourcePV *v1.PersistentVolume, destNS string, destPVCName string) (*v1.Endpoints, error) {
+	// Need to copy the endpoints from the supervol to the new PVC. A
+	// reference of the endpoints name is not sufficient, it can be in an
+	// other namespace.
+	sourceEP, err := p.client.CoreV1().Endpoints(sourceNS).Get(sourcePV.Spec.Glusterfs.EndpointsName, metav1.GetOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("endpoint %s for source PV %s can not be found: %s", sourcePV.Spec.Glusterfs.EndpointsName, sourcePV.Name, err)
+	}
+
+	ep := sourceEP.DeepCopy()
+	ep.ObjectMeta = metav1.ObjectMeta{
+		Namespace: destNS,
+		Name:      dynamicEpSvcPrefix+destPVCName,
+		Labels: map[string]string{
+			"gluster.org/provisioned-for-pvc": destPVCName,
+		},
+	}
+
+        _, err = p.client.CoreV1().Endpoints(destNS).Create(ep)
+        if err != nil && errors.IsAlreadyExists(err) {
+                glog.V(1).Infof("endpoint %s already exist in namespace %s, that is ok", destPVCName, destNS)
+                err = nil
+        } else if err != nil {
+                return nil, fmt.Errorf("failed to create endpoint %s: %s", ep.ObjectMeta.Name, err)
+        }
+
+	return ep, nil
+}
+
+
 // Provision creates a storage asset and returns a PV object representing it.
 func (p *glusterSubvolProvisioner) Provision(options controller.VolumeOptions) (*v1.PersistentVolume, error) {
 	if options.PVC.Spec.Selector != nil {
@@ -357,18 +388,17 @@ func (p *glusterSubvolProvisioner) Provision(options controller.VolumeOptions) (
 	// TODO: need to os.Chgrp() w/ new gid for all files? Should be done by mount process.
 	// TODO: set quota? Not possible through standard tools, only gluster CLI?
 
-	// Need to copy the endpoints from the supervol to the new PVC. A
-	// reference of the endpoints name is not sufficient, it can be in an
-	// other namespace.
-//	ep, err := p.client.CoreV1().Endpoints(options.PVC.Namespace).Get(supervolPV.Spec.Glusterfs.EndpointsName, metav1.GetOptions{})
-//	if err != nil {
-//		return nil, fmt.Errorf("endpoint %s for supervol PV %s can not be found: %s", supervolPV.Spec.Glusterfs.EndpointsName, supervolPV.Name, err)
-//	}
+	// subdir has been setup, create the PVC object
+	ep, err := p.copyEndpoints(supervolNS, supervolPV, options.PVC.Namespace, options.PVC.Name)
+	if err != nil {
+		return nil, fmt.Errorf("failed to copy endpoint from supervol %s", supervolPV.Name, err)
+	}
+
+	// TODO: glusterfile creates a Service for each PVC, is that really needed?
 
 	glusterfs := &v1.GlusterfsVolumeSource{
-		// TODO: need to create a new endpoint, copy the one from the supervol into the namespace of the pvc
-		// one in the right namespace, use: ep := Endpoints.DeepCopy()
-		EndpointsName: supervolPV.Spec.Glusterfs.EndpointsName,
+		EndpointsName: ep.ObjectMeta.Name,
+		// Path is in the format of <volumename>/<namespace>/<pvcname>, allows mounting
 		Path:          supervolPV.Spec.Glusterfs.Path+"/"+options.PVC.Namespace+"/"+options.PVC.Name,
 		ReadOnly:      false,
 	}
