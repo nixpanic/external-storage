@@ -446,6 +446,12 @@ func (p *glusterSubvolProvisioner) Delete(pv *v1.PersistentVolume) error {
 		return err
 	}
 
+	// TODO(test): need to delete the endpoint
+	err = p.client.CoreV1().Endpoints(pv.Spec.ClaimRef.Namespace).Delete(pv.Spec.Glusterfs.EndpointsName, &metav1.DeleteOptions{})
+	if err != nil {
+		glog.Infof("could not delete endpoint %s/%s: %s", pv.Spec.ClaimRef.Namespace, pv.Spec.Glusterfs.EndpointsName, err)
+	}
+
 	// need to get the supervol where this PV lives
 	parentPVC, ok := pv.ObjectMeta.Annotations[parentPVCAnn]
 	if !ok {
@@ -491,7 +497,6 @@ func (p *glusterSubvolProvisioner) Delete(pv *v1.PersistentVolume) error {
 	}
 	glog.V(2).Infof("PV %s deleted successfully", pv.Name)
 
-	// TODO: need to delete the endpoint
 	return nil
 }
 
