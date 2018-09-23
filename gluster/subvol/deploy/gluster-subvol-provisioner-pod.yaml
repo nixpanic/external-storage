@@ -27,7 +27,10 @@ rules:
     verbs: ["get", "list"]
   - apiGroups: [""]
     resources: ["endpoints"]
-    verbs: ["get", "list", "watch", "create", "update", "patch"]
+    # all provisioners require some access to Endpoints, but we also need to
+    # create/delete Endpoints to allow the mounts to happen in the namespace of
+    # the PVC (create, get, delete)
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
 ---
 apiVersion: v1
 kind: ServiceAccount
