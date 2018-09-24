@@ -30,8 +30,8 @@ import (
 	"github.com/kubernetes-sigs/sig-storage-lib-external-provisioner/gidallocator"
 	"github.com/kubernetes-sigs/sig-storage-lib-external-provisioner/util"
 	"k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
@@ -41,14 +41,14 @@ import (
 )
 
 const (
-	provisionerName           = "gluster.org/gluster-subvol"
-	provisionerNameKey        = "PROVISIONER_NAME"
-	descAnn                   = "Gluster-subvol: Dynamically provisioned PV"
-	dynamicEpSvcPrefix        = "gluster-subvol-dynamic-"
-	glusterTypeAnn            = "gluster.org/type"
-	parentPVCAnn              = "gluster.org/parentpvc"
-	gidAnn                    = "pv.beta.kubernetes.io/gid"
-	workdir                   = "/var/run/gluster-subvol"
+	provisionerName    = "gluster.org/gluster-subvol"
+	provisionerNameKey = "PROVISIONER_NAME"
+	descAnn            = "Gluster-subvol: Dynamically provisioned PV"
+	dynamicEpSvcPrefix = "gluster-subvol-dynamic-"
+	glusterTypeAnn     = "gluster.org/type"
+	parentPVCAnn       = "gluster.org/parentpvc"
+	gidAnn             = "pv.beta.kubernetes.io/gid"
+	workdir            = "/var/run/gluster-subvol"
 
 	// CloneRequestAnn is an annotation to request that the PVC be provisioned as a clone of the referenced PVC
 	CloneRequestAnn = "k8s.io/CloneRequest"
@@ -61,7 +61,7 @@ type glusterSubvolProvisioner struct {
 	client    kubernetes.Interface
 	identity  string
 	allocator gidallocator.Allocator
-	mtab     map[string]string
+	mtab      map[string]string
 }
 
 var _ controller.Provisioner = &glusterSubvolProvisioner{}
@@ -72,23 +72,20 @@ var accessModes = []v1.PersistentVolumeAccessMode{
 	v1.ReadWriteOnce,
 }
 
-
 func newGlusterSubvolProvisioner(client kubernetes.Interface, id string) (controller.Provisioner, error) {
 	p := &glusterSubvolProvisioner{
 		client:    client,
 		identity:  id,
 		allocator: gidallocator.New(client),
-		mtab:	   make(map[string]string),
+		mtab:      make(map[string]string),
 	}
 
 	return p, nil
 }
 
-
 func (p *glusterSubvolProvisioner) getPVC(ns string, name string) (*v1.PersistentVolumeClaim, error) {
 	return p.client.CoreV1().PersistentVolumeClaims(ns).Get(name, metav1.GetOptions{})
 }
-
 
 func (p *glusterSubvolProvisioner) annotatePVC(ns string, name string, updates map[string]string) error {
 	// Retrieve the latest version of PVC before attempting update
@@ -112,7 +109,6 @@ func (p *glusterSubvolProvisioner) annotatePVC(ns string, name string, updates m
 	return nil
 }
 
-
 // mount the given PV if not mounted yet, return the mountpoint or an error
 func (p *glusterSubvolProvisioner) mountPV(ns string, pv *v1.PersistentVolume) (string, error) {
 	// check if not mounted yet
@@ -123,7 +119,7 @@ func (p *glusterSubvolProvisioner) mountPV(ns string, pv *v1.PersistentVolume) (
 	}
 
 	// create the missing mountpoint
-	mountpoint = workdir+"/"+pv.Name
+	mountpoint = workdir + "/" + pv.Name
 	sb, err := os.Stat(mountpoint)
 	if err != nil {
 		// mountpoint does not exist yet, create it
@@ -158,15 +154,15 @@ func (p *glusterSubvolProvisioner) mountPV(ns string, pv *v1.PersistentVolume) (
 		var backupVolfileServers string
 		for _, addr := range ep.Subsets[0].Addresses[1:] {
 			if backupVolfileServers != "" {
-				backupVolfileServers = backupVolfileServers+":"
+				backupVolfileServers = backupVolfileServers + ":"
 			}
-			backupVolfileServers = backupVolfileServers+addr.IP
+			backupVolfileServers = backupVolfileServers + addr.IP
 		}
 
 		if mountOpts != "" {
-			mountOpts = mountOpts+","
+			mountOpts = mountOpts + ","
 		}
-		mountOpts = mountOpts+"backup-volfile-servers="+backupVolfileServers
+		mountOpts = mountOpts + "backup-volfile-servers=" + backupVolfileServers
 	}
 
 	mountCmd := make([]string, 0, 7)
@@ -174,7 +170,7 @@ func (p *glusterSubvolProvisioner) mountPV(ns string, pv *v1.PersistentVolume) (
 
 	// don't forget the "-o" option before the mount options string
 	if mountOpts != "" {
-		mountOpts = "-o "+mountOpts
+		mountOpts = "-o " + mountOpts
 		mountCmd = append(mountCmd, "-o", mountOpts)
 	}
 
@@ -202,7 +198,6 @@ func (p *glusterSubvolProvisioner) mountPV(ns string, pv *v1.PersistentVolume) (
 	return mountpoint, nil
 }
 
-
 func (p *glusterSubvolProvisioner) makeSubvolPath(mountpoint, pvcNS string, pvcUID types.UID) string {
 	return fmt.Sprintf("%s/%s/pvc-%s", mountpoint, pvcNS, pvcUID)
 }
@@ -223,23 +218,22 @@ func (p *glusterSubvolProvisioner) copyEndpoints(sourceNS string, sourcePV *v1.P
 	ep := sourceEP.DeepCopy()
 	ep.ObjectMeta = metav1.ObjectMeta{
 		Namespace: destNS,
-		Name:      dynamicEpSvcPrefix+destPVCName,
+		Name:      dynamicEpSvcPrefix + destPVCName,
 		Labels: map[string]string{
 			"gluster.org/provisioned-for-pvc": destPVCName,
 		},
 	}
 
-        _, err = p.client.CoreV1().Endpoints(destNS).Create(ep)
-        if err != nil && errors.IsAlreadyExists(err) {
-                glog.V(1).Infof("endpoint %s already exist in namespace %s, that is ok", destPVCName, destNS)
-                err = nil
-        } else if err != nil {
-                return nil, fmt.Errorf("failed to create endpoint %s: %s", ep.ObjectMeta.Name, err)
-        }
+	_, err = p.client.CoreV1().Endpoints(destNS).Create(ep)
+	if err != nil && errors.IsAlreadyExists(err) {
+		glog.V(1).Infof("endpoint %s already exist in namespace %s, that is ok", destPVCName, destNS)
+		err = nil
+	} else if err != nil {
+		return nil, fmt.Errorf("failed to create endpoint %s: %s", ep.ObjectMeta.Name, err)
+	}
 
 	return ep, nil
 }
-
 
 // Provision creates a storage asset and returns a PV object representing it.
 func (p *glusterSubvolProvisioner) Provision(options controller.VolumeOptions) (*v1.PersistentVolume, error) {
@@ -272,7 +266,7 @@ func (p *glusterSubvolProvisioner) Provision(options controller.VolumeOptions) (
 		}
 	}
 
-	if (len(supervolPVCName) == 0) {
+	if len(supervolPVCName) == 0 {
 		return nil, fmt.Errorf("pvc is a required options for volume plugin %s", provisionerName)
 	}
 
@@ -312,7 +306,6 @@ func (p *glusterSubvolProvisioner) Provision(options controller.VolumeOptions) (
 	volSizeBytes := volSize.Value()
 	volszInt := int(util.RoundUpToGiB(volSizeBytes))
 	*/
-
 
 	// in case smartcloning fails, the new PVC should be created, but
 	// without the CloneOf annotation. The assumption is that the origin of
@@ -433,23 +426,22 @@ func (p *glusterSubvolProvisioner) Provision(options controller.VolumeOptions) (
 		ObjectMeta: metav1.ObjectMeta{
 			Name: options.PVName,
 			Annotations: map[string]string{
-				gidAnn:                   strconv.FormatInt(int64(*gid), 10),
-				glusterTypeAnn:           "subvol",
-				parentPVCAnn:             supervolNS+"/"+supervolPVC.Name,
-				"Description":            descAnn,
+				gidAnn:         strconv.FormatInt(int64(*gid), 10),
+				glusterTypeAnn: "subvol",
+				parentPVCAnn:   supervolNS + "/" + supervolPVC.Name,
+				"Description":  descAnn,
 			},
 		},
 		Spec: pvc,
 	}
 
 	// sourcePVCRef will be empty if there was no cloning request, or cloning failed
-	if (sourcePVCRef != "") {
+	if sourcePVCRef != "" {
 		pv.ObjectMeta.Annotations[CloneOfAnn] = sourcePVCRef
 	}
 
 	return pv, nil
 }
-
 
 func (p *glusterSubvolProvisioner) Delete(pv *v1.PersistentVolume) error {
 	// we only support Gluster Volumes for now
@@ -516,7 +508,6 @@ func (p *glusterSubvolProvisioner) Delete(pv *v1.PersistentVolume) error {
 
 	return nil
 }
-
 
 var (
 	master     = flag.String("master", "", "Master URL")
