@@ -294,16 +294,10 @@ func (p *glusterSubvolProvisioner) Provision(options controller.VolumeOptions) (
 		return nil, fmt.Errorf("could not find PV for PVC %s/%s", supervolNS, supervolPVCName)
 	}
 
-	var gid *int
-	if gidAllocate {
-		allocate, err := p.allocator.AllocateNext(options)
-		if err != nil {
-			return nil, fmt.Errorf("allocator error: %v", err)
-		}
-		gid = &allocate
+	// we only support Gluster Volumes for now
+	if supervolPV.Spec.Glusterfs == nil {
+		return nil, fmt.Errorf("the supervol PVC %s/%s needs to be of type Glusterfs", supervolNS, supervolPVCName)
 	}
-	glog.V(1).Infof("Allocated GID %d for PVC %s", *gid, options.PVC.Name)
-
 
 	// mount the supervolPV
 	mountpoint, err := p.mountPV(supervolNS, supervolPV)
@@ -395,6 +389,16 @@ func (p *glusterSubvolProvisioner) Provision(options controller.VolumeOptions) (
 	}
 
 	// TODO: need to os.Chgrp() w/ new gid for all files? Should be done by mount process.
+	var gid *int
+	if gidAllocate {
+		allocate, err := p.allocator.AllocateNext(options)
+		if err != nil {
+			return nil, fmt.Errorf("allocator error: %v", err)
+		}
+		gid = &allocate
+	}
+	glog.V(1).Infof("Allocated GID %d for PVC %s", *gid, options.PVC.Name)
+
 	// TODO: set quota? Not possible through standard tools, only gluster CLI?
 
 	// subdir has been setup, create the PVC object
@@ -448,6 +452,11 @@ func (p *glusterSubvolProvisioner) Provision(options controller.VolumeOptions) (
 
 
 func (p *glusterSubvolProvisioner) Delete(pv *v1.PersistentVolume) error {
+	// we only support Gluster Volumes for now
+	if pv.Spec.Glusterfs == nil {
+		return fmt.Errorf("PV %s needs to be of type Glusterfs", pv.Name)
+	}
+
 	// return the uid/gid back to the pool
 	err := p.allocator.Release(pv)
 	if err != nil {
