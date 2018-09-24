@@ -75,7 +75,8 @@ spec:
       serviceAccountName: gluster-subvol-provisioner
       containers:
       - name: gluster-subvol-provisioner
-        image: docker-registry.engineering.redhat.com/ndevos/gluster-subvol-provisioner:latest
+        # TODO: use official images after provisioner has been merged
+        image: quay.io/nixpanic/k8s-external-storage:wip_gluster_subvol
         imagePullPolicy: Always
         volumeMounts:
         - name: gluster-subvol-dev-fuse
