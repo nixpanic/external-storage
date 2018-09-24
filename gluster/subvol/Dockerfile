@@ -35,6 +35,7 @@ LABEL maintainer="Niels de Vos <ndevos@redhat,com>"
 
 # install glusterfs-fuse to make mounting possible
 RUN yum -y install centos-release-gluster && yum -y install glusterfs-fuse && \
+    yum -y update && \
     yum --enablerepo=* clean all && \
     true
 
