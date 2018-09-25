@@ -235,6 +235,73 @@ func (p *glusterSubvolProvisioner) copyEndpoints(sourceNS string, sourcePV *v1.P
 	return ep, nil
 }
 
+// Check if the PVC has a CloneRequest annotation and try to clone if it has.
+// This returns the source PVC that got cloned, an error if something fails.
+func (p *glusterSubvolProvisioner) tryClone(pvc *v1.PersistentVolumeClaim, mountpoint, destDir string) (string, error) {
+	// sourcePVCRef points to the PVC that should get cloned
+	sourcePVCRef, ok := pvc.Annotations[CloneRequestAnn]
+	if !ok || sourcePVCRef == "" {
+		// no CloneRequest, no need to try and clone
+		return "", nil
+	}
+
+	glog.Infof("got requested to clone %s for PVC %s/%s", sourcePVCRef, pvc.Namespace, pvc.Name)
+
+	// sourcePVCRef is like (namespace/)?pvc
+	var sourceNS, sourcePVCName string
+
+	parts := strings.Split(sourcePVCRef, "/")
+	if len(parts) == 1 {
+		sourceNS = pvc.Namespace
+		sourcePVCName = parts[0]
+	} else if len(parts) == 2 {
+		sourceNS = parts[0]
+		sourcePVCName = parts[1]
+	} else {
+		return "", fmt.Errorf("failed to parse namespace/pvc from %s", sourcePVCRef)
+	}
+
+	// TODO: check if the size of the PVC >= source
+
+	sourcePVC, err := p.getPVC(sourceNS, sourcePVCName)
+	if err != nil {
+		return "", fmt.Errorf("failed to find PVC %s/%s: %s", sourceNS, sourcePVCName, err)
+	}
+
+	// TODO: get the sourcePV from the sourcePVC and verify subdir for sourceDir
+	//sourcePV, err := p.client.CoreV1().PersistentVolumes().Get(sourcePVC.Spec.VolumeName, metav1.GetOptions{})
+	//if err != nil {
+	//	return nil, fmt.Errorf("could not find PV %s for PVC %s/%s", sourcePVC.Spec.VolumeName, sourceNS, sourcePVCName)
+	//}
+
+	sourceDir := p.makeSubvolPath(mountpoint, sourceNS, sourcePVC.UID)
+
+	// verify that the sourcePVC is on the supervolPVC
+	st, err := os.Stat(sourceDir)
+	if err != nil || !st.Mode().IsDir() {
+		return "", fmt.Errorf("failed to clone %s, path does not exist on supervol", sourcePVCRef)
+	}
+
+	// verification has been done!
+
+	// optimized copy, uses copy_file_range() if possible
+	err = fs.CopyDir(destDir, sourceDir)
+	if err != nil {
+		glog.V(1).Infof("failed to clone %s/%s, will try to cleanup: %s", sourceNS, sourcePVCName, err)
+		sourcePVCRef = ""
+
+		// Delete destDir, partial clone? Fallthrough to normal Mkdir().
+		err = os.RemoveAll(destDir)
+		if err != nil {
+			return "", fmt.Errorf("failed to cleanup partially cloned %s/%s: %s", sourceNS, sourcePVCName, err)
+		}
+		return "", nil
+	}
+
+	glog.Infof("successfully cloned %s/%s for PVC %s/%s", sourceNS, sourcePVCName, pvc.Namespace, pvc.Name)
+	return sourcePVCRef, nil
+}
+
 // Provision creates a storage asset and returns a PV object representing it.
 func (p *glusterSubvolProvisioner) Provision(options controller.VolumeOptions) (*v1.PersistentVolume, error) {
 	if options.PVC.Spec.Selector != nil {
@@ -315,69 +382,12 @@ func (p *glusterSubvolProvisioner) Provision(options controller.VolumeOptions) (
 	// full path of the directory for the new PV
 	destDir := p.makeSubvolPath(mountpoint, options.PVC.Namespace, options.PVC.UID)
 
-	// sourcePVCRef points to the PVC that should get cloned
-	// is sourcePVCRef is (still) set, a CloneOf annotation in the new PVC will be added
-	sourcePVCRef, ok := options.PVC.Annotations[CloneRequestAnn]
-	if ok && sourcePVCRef != "" {
-		glog.Infof("got requested to clone %s for PVC %s/%s", sourcePVCRef, options.PVC.Namespace, options.PVC.Name)
-
-		// sourcePVCRef is like (namespace/)?pvc
-		var sourceNS, sourcePVCName string
-
-		parts := strings.Split(sourcePVCRef, "/")
-		if len(parts) == 1 {
-			sourceNS = options.PVC.Namespace
-			sourcePVCName = parts[0]
-		} else if len(parts) == 2 {
-			sourceNS = parts[0]
-			sourcePVCName = parts[1]
-		} else {
-			return nil, fmt.Errorf("failed to parse namespace/pvc from %s", sourcePVCRef)
-		}
-
-		// TODO: check if the size of the PVC >= source
-
-		// TODO: where is the CloneOf mounted? Add to sourceDir/destDir
-		sourcePVC, err := p.getPVC(sourceNS, sourcePVCName)
-		if err != nil {
-			return nil, fmt.Errorf("failed to find PVC %s/%s: %s", sourceNS, sourcePVCName, err)
-		}
-
-		// TODO: get the sourcePV from the sourcePVC and verify subdir for sourceDir
-		//sourcePV, err := p.client.CoreV1().PersistentVolumes().Get(sourcePVC.Spec.VolumeName, metav1.GetOptions{})
-		//if err != nil {
-		//	return nil, fmt.Errorf("could not find PV %s for PVC %s/%s", sourcePVC.Spec.VolumeName, sourceNS, sourcePVCName)
-		//}
-
-		// TODO: how to find out the type of the PV?
-		sourceDir := p.makeSubvolPath(mountpoint, sourceNS, sourcePVC.UID)
-
-		// verify that the sourcePVC is on the supervolPVC
-		st, err := os.Stat(sourceDir)
-		if err != nil || !st.Mode().IsDir() {
-			return nil, fmt.Errorf("failed to clone %s, path does not exist on PVC %s/%s", sourcePVCRef, supervolNS, supervolPVCName)
-		}
-
-		// verification has been done!
-
-		// optimized copy, uses copy_file_range() if possible
-		err = fs.CopyDir(destDir, sourceDir)
-		if err != nil {
-			glog.V(1).Infof("failed to clone %s/%s, will try to cleanup: %s", sourceNS, sourcePVCName, err)
-			sourcePVCRef = ""
-
-			// Delete destDir, partial clone? Fallthrough to normal Mkdir().
-			err = os.RemoveAll(destDir)
-			if err != nil {
-				return nil, fmt.Errorf("failed to cleanup partially cloned %s/%s: %s", sourceNS, sourcePVCName, err)
-			}
-		} else {
-			glog.Infof("successfully cloned %s/%s for PVC %s/%s", sourceNS, sourcePVCName, options.PVC.Namespace, options.PVC.Name)
-		}
-	}
-
-	// No CloneRequest annotation, or cloning failed. Create a new empty subdir.
-	if sourcePVCRef == "" {
+	// In case an error occurred during cloning, an empty PVC should be
+	// created. This is the same behaviour as provisioners that do not
+	// provide cloning support. The "k8s.io/CloneOf" annotation should only
+	// get set if cloning was successful.
+	sourcePVCRef, err := p.tryClone(options.PVC, mountpoint, destDir)
+	if err != nil || sourcePVCRef == "" {
 		err := os.MkdirAll(destDir, 0775)
 		if err != nil {
 			return nil, fmt.Errorf("Failed to create subdir for new pvc %s: %s", options.PVC.Name, err)
