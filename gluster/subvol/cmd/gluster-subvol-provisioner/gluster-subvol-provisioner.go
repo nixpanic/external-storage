@@ -423,7 +423,7 @@ func (p *glusterSubvolProvisioner) Provision(options controller.VolumeOptions) (
 	}
 
 	mode := v1.PersistentVolumeFilesystem
-	pvc := v1.PersistentVolumeSpec{
+	pvSpec := v1.PersistentVolumeSpec{
 		PersistentVolumeReclaimPolicy: options.PersistentVolumeReclaimPolicy,
 		AccessModes:                   options.PVC.Spec.AccessModes,
 		MountOptions:                  supervolPV.Spec.MountOptions,
@@ -446,7 +446,7 @@ func (p *glusterSubvolProvisioner) Provision(options controller.VolumeOptions) (
 				"Description":  descAnn,
 			},
 		},
-		Spec: pvc,
+		Spec: pvSpec,
 	}
 
 	// sourcePVCRef will be empty if there was no cloning request, or cloning failed
