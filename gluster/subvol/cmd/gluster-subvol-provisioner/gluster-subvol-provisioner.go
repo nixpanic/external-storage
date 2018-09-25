@@ -371,6 +371,8 @@ func (p *glusterSubvolProvisioner) Provision(options controller.VolumeOptions) (
 			if err != nil {
 				return nil, fmt.Errorf("failed to cleanup partially cloned %s/%s: %s", sourceNS, sourcePVCName, err)
 			}
+		} else {
+			glog.Infof("successfully cloned %s/%s for PVC %s/%s", sourceNS, sourcePVCName, options.PVC.Namespace, options.PVC.Name)
 		}
 	}
 
