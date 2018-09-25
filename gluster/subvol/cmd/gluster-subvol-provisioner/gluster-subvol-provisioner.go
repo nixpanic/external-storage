@@ -319,6 +319,8 @@ func (p *glusterSubvolProvisioner) Provision(options controller.VolumeOptions) (
 	// is sourcePVCRef is (still) set, a CloneOf annotation in the new PVC will be added
 	sourcePVCRef, ok := options.PVC.Annotations[CloneRequestAnn]
 	if ok && sourcePVCRef != "" {
+		glog.Infof("got requested to clone %s for PVC %s/%s", sourcePVCRef, options.PVC.Namespace, options.PVC.Name)
+
 		// sourcePVCRef is like (namespace/)?pvc
 		var sourceNS, sourcePVCName string
 
