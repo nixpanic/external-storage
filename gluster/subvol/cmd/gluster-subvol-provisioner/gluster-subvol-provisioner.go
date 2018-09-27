@@ -257,7 +257,7 @@ func (p *glusterSubvolProvisioner) validateProvisionRequirements(pvcReq, supervo
 }
 
 // Check if the PVC has a CloneRequest annotation and try to clone if it has.
-// This returns the source PVC that got cloned, an error if something fails.
+// This returns the source namespace/PVC that got cloned, an error if something fails.
 func (p *glusterSubvolProvisioner) tryClone(pvc *v1.PersistentVolumeClaim, mountpoint, destDir string) (string, error) {
 	// sourcePVCRef points to the PVC that should get cloned
 	sourcePVCRef, ok := pvc.Annotations[CloneRequestAnn]
@@ -320,7 +320,7 @@ func (p *glusterSubvolProvisioner) tryClone(pvc *v1.PersistentVolumeClaim, mount
 	}
 
 	glog.Infof("successfully cloned %s/%s for PVC %s/%s", sourceNS, sourcePVCName, pvc.Namespace, pvc.Name)
-	return sourcePVCRef, nil
+	return sourceNS+"/"+sourcePVCName, nil
 }
 
 // Provision creates a storage asset and returns a PV object representing it.
