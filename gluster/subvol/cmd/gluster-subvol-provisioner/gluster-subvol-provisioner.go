@@ -235,6 +235,27 @@ func (p *glusterSubvolProvisioner) copyEndpoints(sourceNS string, sourcePV *v1.P
 	return ep, nil
 }
 
+// Pre-check for the requirements of the PVC-request and the supervol PVC.
+// - certain features of the PVC-request may not be supported
+// - the supervol PVC has some requirements that it needs to fulfil
+func (p *glusterSubvolProvisioner) validateProvisionRequirements(pvcReq, supervolPVC *v1.PersistentVolumeClaim) error {
+	if pvcReq.Spec.Selector != nil {
+		return fmt.Errorf("claim Selector is not supported")
+	}
+
+	if !util.AccessModesContainedInAll(accessModes, pvcReq.Spec.AccessModes) {
+		return fmt.Errorf("invalid AccessModes %v: only AccessModes %v are supported", pvcReq.Spec.AccessModes, accessModes)
+	}
+
+	// check permission mode, the PV should be RWX as it is mounted here,
+	// and we'll create subdirs as new PVCs
+	if !util.AccessModesContains(supervolPVC.Spec.AccessModes, v1.ReadWriteMany) {
+		return fmt.Errorf("this provisioner requires the PVC %s/%s to have ReadWriteMany permissions", supervolPVC.Namespace, supervolPVC.Name)
+	}
+
+	return nil
+}
+
 // Check if the PVC has a CloneRequest annotation and try to clone if it has.
 // This returns the source PVC that got cloned, an error if something fails.
 func (p *glusterSubvolProvisioner) tryClone(pvc *v1.PersistentVolumeClaim, mountpoint, destDir string) (string, error) {
@@ -304,14 +325,6 @@ func (p *glusterSubvolProvisioner) tryClone(pvc *v1.PersistentVolumeClaim, mount
 
 // Provision creates a storage asset and returns a PV object representing it.
 func (p *glusterSubvolProvisioner) Provision(options controller.VolumeOptions) (*v1.PersistentVolume, error) {
-	if options.PVC.Spec.Selector != nil {
-		return nil, fmt.Errorf("claim Selector is not supported")
-	}
-
-	if !util.AccessModesContainedInAll(accessModes, options.PVC.Spec.AccessModes) {
-		return nil, fmt.Errorf("invalid AccessModes %v: only AccessModes %v are supported", options.PVC.Spec.AccessModes, accessModes)
-	}
-
 	var supervolNS, supervolPVCName string
 	gidAllocate := true
 	for k, v := range options.Parameters {
@@ -333,7 +346,7 @@ func (p *glusterSubvolProvisioner) Provision(options controller.VolumeOptions) (
 		}
 	}
 
-	if len(supervolPVCName) == 0 {
+	if supervolPVCName == "" {
 		return nil, fmt.Errorf("pvc is a required options for volume plugin %s", provisionerName)
 	}
 
@@ -343,10 +356,9 @@ func (p *glusterSubvolProvisioner) Provision(options controller.VolumeOptions) (
 		return nil, fmt.Errorf("could not find pvc %s in namespace %s", supervolPVCName, supervolNS)
 	}
 
-	// check permission mode, the PV should be RWX as it is mounted here,
-	// and we'll create subdirs as new PVCs
-	if !util.AccessModesContains(supervolPVC.Spec.AccessModes, v1.ReadWriteMany) {
-		return nil, fmt.Errorf("this provisioner requires the PVC %s/%s to have ReadWriteMany permissions", supervolNS, supervolPVCName)
+	err = p.validateProvisionRequirements(options.PVC, supervolPVC)
+	if err != nil {
+		return nil, err
 	}
 
 	// based on the PVC we can get the PV
