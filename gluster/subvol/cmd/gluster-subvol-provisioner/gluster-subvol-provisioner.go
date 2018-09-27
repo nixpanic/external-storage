@@ -463,7 +463,7 @@ func (p *glusterSubvolProvisioner) Provision(options controller.VolumeOptions) (
 
 	// sourcePVCRef will be empty if there was no cloning request, or cloning failed
 	if sourcePVCRef != "" {
-		pv.ObjectMeta.Annotations[CloneOfAnn] = sourcePVCRef
+		options.PVC.Annotations[CloneOfAnn] = sourcePVCRef
 	}
 
 	return pv, nil
