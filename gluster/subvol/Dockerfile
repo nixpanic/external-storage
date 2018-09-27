@@ -21,6 +21,7 @@ COPY gluster/subvol /srv/build/src/github.com/kubernetes-incubator/external-stor
 ENV GOPATH=/srv/build
 
 RUN dnf -y install golang dep && \
+    dnf -y update && \
     cd /srv/build/src/github.com/kubernetes-incubator/external-storage && \
     dep ensure -v && \
     cd gluster/subvol && \
