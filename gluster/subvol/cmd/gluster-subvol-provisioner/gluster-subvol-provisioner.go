@@ -464,6 +464,11 @@ func (p *glusterSubvolProvisioner) Provision(options controller.VolumeOptions) (
 	// sourcePVCRef will be empty if there was no cloning request, or cloning failed
 	if sourcePVCRef != "" {
 		options.PVC.Annotations[CloneOfAnn] = sourcePVCRef
+		_, err = p.client.CoreV1().PersistentVolumeClaims(options.PVC.Namespace).Update(options.PVC)
+		if err != nil {
+			// TODO: retry or cleanup the cloned data?
+			glog.Errorf("cloning %s was successful, but setting the annotation on PVC %s/%s was not", sourcePVCRef, options.PVC.Namespace, options.PVC.Name)
+		}
 	}
 
 	return pv, nil
