@@ -87,13 +87,13 @@ func (p *glusterSubvolProvisioner) getPVC(ns string, name string) (*v1.Persisten
 	return p.client.CoreV1().PersistentVolumeClaims(ns).Get(name, metav1.GetOptions{})
 }
 
-func (p *glusterSubvolProvisioner) annotatePVC(ns string, name string, updates map[string]string) error {
+func (p *glusterSubvolProvisioner) annotatePVC(ns, pvc string, updates map[string]string) error {
 	// Retrieve the latest version of PVC before attempting update
 	// RetryOnConflict uses exponential backoff to avoid exhausting the apiserver
 	retryErr := retry.RetryOnConflict(retry.DefaultRetry, func() error {
-		result, getErr := p.getPVC(ns, name)
+		result, getErr := p.getPVC(ns, pvc)
 		if getErr != nil {
-			panic(fmt.Errorf("Failed to get latest version of PVC: %v", getErr))
+			panic(fmt.Errorf("Failed to get latest version of PVC %s/%s: %s", ns, pvc, getErr))
 		}
 
 		for k, v := range updates {
@@ -103,7 +103,7 @@ func (p *glusterSubvolProvisioner) annotatePVC(ns string, name string, updates m
 		return updateErr
 	})
 	if retryErr != nil {
-		glog.Errorf("Update failed: %v", retryErr)
+		glog.Errorf("Update of PVC %s/%s failed: %s", ns, pvc, retryErr)
 		return retryErr
 	}
 	return nil
@@ -464,7 +464,7 @@ func (p *glusterSubvolProvisioner) Provision(options controller.VolumeOptions) (
 	// sourcePVCRef will be empty if there was no cloning request, or cloning failed
 	if sourcePVCRef != "" {
 		options.PVC.Annotations[CloneOfAnn] = sourcePVCRef
-		_, err = p.client.CoreV1().PersistentVolumeClaims(options.PVC.Namespace).Update(options.PVC)
+		err = p.annotatePVC(options.PVC.Namespace, options.PVC.Name, options.PVC.Annotations)
 		if err != nil {
 			// TODO: retry or cleanup the cloned data?
 			glog.Errorf("cloning %s was successful, but setting the annotation on PVC %s/%s was not", sourcePVCRef, options.PVC.Namespace, options.PVC.Name)
