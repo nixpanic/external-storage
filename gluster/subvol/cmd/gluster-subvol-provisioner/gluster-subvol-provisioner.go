@@ -23,6 +23,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"syscall"
 
 	"github.com/containerd/continuity/fs"
 	"github.com/golang/glog"
@@ -127,7 +128,7 @@ func (p *glusterSubvolProvisioner) mountPV(ns string, pv *v1.PersistentVolume) (
 
 		err = os.MkdirAll(mountpoint, 0775)
 		if err != nil {
-			return "", fmt.Errorf("failed to creat mountpoint %s for PV %s: %s", mountpoint, pv.Name, err)
+			return "", fmt.Errorf("failed to create mountpoint %s for PV %s: %s", mountpoint, pv.Name, err)
 		}
 	} else if !sb.Mode().IsDir() {
 		// mountpoint should be a directory, but it is not?!
@@ -289,15 +290,8 @@ func (p *glusterSubvolProvisioner) tryClone(pvc *v1.PersistentVolumeClaim, mount
 		return "", fmt.Errorf("failed to find PVC %s/%s: %s", sourceNS, sourcePVCName, err)
 	}
 
-	// TODO: get the sourcePV from the sourcePVC and verify subdir for sourceDir
-	//sourcePV, err := p.client.CoreV1().PersistentVolumes().Get(sourcePVC.Spec.VolumeName, metav1.GetOptions{})
-	//if err != nil {
-	//	return nil, fmt.Errorf("could not find PV %s for PVC %s/%s", sourcePVC.Spec.VolumeName, sourceNS, sourcePVCName)
-	//}
-
-	sourceDir := p.makeSubvolPath(mountpoint, sourceNS, sourcePVC.UID)
-
 	// verify that the sourcePVC is on the supervolPVC
+	sourceDir := p.makeSubvolPath(mountpoint, sourceNS, sourcePVC.UID)
 	st, err := os.Stat(sourceDir)
 	if err != nil || !st.Mode().IsDir() {
 		return "", fmt.Errorf("failed to clone %s, path does not exist on supervol", sourcePVCRef)
@@ -320,7 +314,7 @@ func (p *glusterSubvolProvisioner) tryClone(pvc *v1.PersistentVolumeClaim, mount
 	}
 
 	glog.Infof("successfully cloned %s/%s for PVC %s/%s", sourceNS, sourcePVCName, pvc.Namespace, pvc.Name)
-	return sourceNS+"/"+sourcePVCName, nil
+	return sourceNS + "/" + sourcePVCName, nil
 }
 
 // Provision creates a storage asset and returns a PV object representing it.
@@ -378,13 +372,19 @@ func (p *glusterSubvolProvisioner) Provision(options controller.VolumeOptions) (
 		return nil, fmt.Errorf("failed to mount PV %s: %s", supervolPV, err)
 	}
 
-	/* TODO:
-	 * - set quota for the size
-	 * - verify that the supervol is large enough
-	volSize := options.PVC.Spec.Resources.Requests[v1.ResourceName(v1.ResourceStorage)]
-	volSizeBytes := volSize.Value()
-	volszInt := int(util.RoundUpToGiB(volSizeBytes))
-	*/
+	// verify that the supervol is large enough
+	statfsBuf := &syscall.Statfs_t{}
+	err = syscall.Statfs(mountpoint, statfsBuf)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get statfs for PV %s: %s", supervolPV, err)
+	}
+
+	subvolSize := options.PVC.Spec.Resources.Requests[v1.ResourceName(v1.ResourceStorage)]
+	if uint64(subvolSize.Value()) > (statfsBuf.Bavail * uint64(statfsBuf.Bsize)) {
+		return nil, fmt.Errorf("PVC request for %d bytes can not be fulfilled by PV %s", subvolSize.Value(), supervolPV)
+	}
+
+	// TODO: set quota once there is a real API for it, quotactl()?
 
 	// in case smartcloning fails, the new PVC should be created, but
 	// without the CloneOf annotation. The assumption is that the origin of
@@ -400,17 +400,17 @@ func (p *glusterSubvolProvisioner) Provision(options controller.VolumeOptions) (
 	// get set if cloning was successful.
 	sourcePVCRef, err := p.tryClone(options.PVC, mountpoint, destDir)
 	if err != nil || sourcePVCRef == "" {
-		err := os.MkdirAll(destDir, 0775)
+		err = os.MkdirAll(destDir, 0775)
 		if err != nil {
 			return nil, fmt.Errorf("Failed to create subdir for new pvc %s: %s", options.PVC.Name, err)
 		}
 		glog.V(1).Infof("successfully created Gluster Subvol %+v with size and volID", destDir)
 	}
 
-	// TODO: need to os.Chgrp() w/ new gid for all files? Should be done by mount process.
 	var gid *int
 	if gidAllocate {
-		allocate, err := p.allocator.AllocateNext(options)
+		var allocate int // suggested by vetshadow, warning for 'allocate, err := ..'
+		allocate, err = p.allocator.AllocateNext(options)
 		if err != nil {
 			return nil, fmt.Errorf("allocator error: %v", err)
 		}
@@ -423,7 +423,7 @@ func (p *glusterSubvolProvisioner) Provision(options controller.VolumeOptions) (
 	// subdir has been setup, create the PVC object
 	ep, err := p.copyEndpoints(supervolNS, supervolPV, options.PVC.Namespace, options.PVC.Name)
 	if err != nil {
-		return nil, fmt.Errorf("failed to copy endpoint from supervol %s", supervolPV.Name, err)
+		return nil, fmt.Errorf("failed to copy endpoint from supervol %s: %s", supervolPV.Name, err)
 	}
 
 	// TODO: glusterfile creates a Service for each PVC, is that really needed?
@@ -604,5 +604,5 @@ func main() {
 	)
 	pc.Run(wait.NeverStop)
 
-	// TODO: unmount the glusterSubvolProvisioner.mtab entries
+	// TODO: unmount the glusterSubvolProvisioner.mtab entries (now: let container cleanup handle it)
 }
