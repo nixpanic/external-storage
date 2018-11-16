@@ -126,7 +126,7 @@ func (p *glusterSubvolProvisioner) mountPV(ns string, pv *v1.PersistentVolume) (
 		// mountpoint does not exist yet, create it
 		glog.Infof("mountpoint %s for PV %s does not exist yet? Error: %s", mountpoint, pv.Name, err)
 
-		err = os.MkdirAll(mountpoint, 0775)
+		err = os.MkdirAll(mountpoint, 0777)
 		if err != nil {
 			return "", fmt.Errorf("failed to create mountpoint %s for PV %s: %s", mountpoint, pv.Name, err)
 		}
@@ -399,7 +399,7 @@ func (p *glusterSubvolProvisioner) Provision(options controller.VolumeOptions) (
 	// get set if cloning was successful.
 	sourcePVCRef, err := p.tryClone(options.PVC, mountpoint, destDir)
 	if err != nil || sourcePVCRef == "" {
-		err = os.MkdirAll(destDir, 0775)
+		err = os.MkdirAll(destDir, 0777)
 		if err != nil {
 			return nil, fmt.Errorf("Failed to create subdir for new pvc %s: %s", options.PVC.Name, err)
 		}
