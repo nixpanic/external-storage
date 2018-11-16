@@ -171,7 +171,6 @@ func (p *glusterSubvolProvisioner) mountPV(ns string, pv *v1.PersistentVolume) (
 
 	// don't forget the "-o" option before the mount options string
 	if mountOpts != "" {
-		mountOpts = "-o " + mountOpts
 		mountCmd = append(mountCmd, "-o", mountOpts)
 	}
 
