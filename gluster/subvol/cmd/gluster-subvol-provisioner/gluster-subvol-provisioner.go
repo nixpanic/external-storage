@@ -261,8 +261,14 @@ func (p *glusterSubvolProvisioner) validateProvisionRequirements(pvcReq, supervo
 func (p *glusterSubvolProvisioner) tryClone(pvc *v1.PersistentVolumeClaim, mountpoint, destDir string) (string, error) {
 	// sourcePVCRef points to the PVC that should get cloned
 	sourcePVCRef, ok := pvc.Annotations[CloneRequestAnn]
-	if !ok || sourcePVCRef == "" {
+	if !ok {
 		// no CloneRequest, no need to try and clone
+		glog.Infof("no %s annotation for PVC %s/%s, not going to clone", CloneRequestAnn, pvc.Namespace, pvc.Name)
+		return "", nil
+	}
+	if sourcePVCRef == "" {
+		// no CloneRequest, no need to try and clone
+		glog.Infof("annotation %s for PVC %s/%s is empty, not going to clone", CloneRequestAnn, pvc.Namespace, pvc.Name)
 		return "", nil
 	}
 
