@@ -405,6 +405,9 @@ func (p *glusterSubvolProvisioner) Provision(options controller.VolumeOptions) (
 	// get set if cloning was successful.
 	sourcePVCRef, err := p.tryClone(options.PVC, mountpoint, destDir)
 	if err != nil || sourcePVCRef == "" {
+		if err != nil {
+			glog.Errorf("failed to clone, creating empty PVC %s/%s: %s", options.PVC.Namespace, options.PVC.Name, err)
+		}
 		err = os.MkdirAll(destDir, 0777)
 		if err != nil {
 			return nil, fmt.Errorf("Failed to create subdir for new pvc %s: %s", options.PVC.Name, err)
