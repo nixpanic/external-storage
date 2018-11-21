@@ -305,7 +305,7 @@ func (p *glusterSubvolProvisioner) tryClone(pvc *v1.PersistentVolumeClaim, mount
 	// verification has been done!
 
 	// optimized copy, uses copy_file_range() if possible
-	err = fs.CopyDir(destDir, sourceDir)
+	err = fs.CopyDir(destDir, sourceDir, fs.WithAllowXAttrErrors())
 	if err != nil {
 		glog.Infof("failed to clone %s/%s, will try to cleanup: %s", sourceNS, sourcePVCName, err)
 		sourcePVCRef = ""
