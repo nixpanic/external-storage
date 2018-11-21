@@ -226,7 +226,7 @@ func (p *glusterSubvolProvisioner) copyEndpoints(sourceNS string, sourcePV *v1.P
 
 	_, err = p.client.CoreV1().Endpoints(destNS).Create(ep)
 	if err != nil && errors.IsAlreadyExists(err) {
-		glog.V(1).Infof("endpoint %s already exist in namespace %s, that is ok", destPVCName, destNS)
+		glog.Infof("endpoint %s already exist in namespace %s, that is ok", destPVCName, destNS)
 		err = nil
 	} else if err != nil {
 		return nil, fmt.Errorf("failed to create endpoint %s: %s", ep.ObjectMeta.Name, err)
@@ -307,7 +307,7 @@ func (p *glusterSubvolProvisioner) tryClone(pvc *v1.PersistentVolumeClaim, mount
 	// optimized copy, uses copy_file_range() if possible
 	err = fs.CopyDir(destDir, sourceDir)
 	if err != nil {
-		glog.V(1).Infof("failed to clone %s/%s, will try to cleanup: %s", sourceNS, sourcePVCName, err)
+		glog.Infof("failed to clone %s/%s, will try to cleanup: %s", sourceNS, sourcePVCName, err)
 		sourcePVCRef = ""
 
 		// Delete destDir, partial clone? Fallthrough to normal Mkdir().
@@ -409,7 +409,7 @@ func (p *glusterSubvolProvisioner) Provision(options controller.VolumeOptions) (
 		if err != nil {
 			return nil, fmt.Errorf("Failed to create subdir for new pvc %s: %s", options.PVC.Name, err)
 		}
-		glog.V(1).Infof("successfully created Gluster Subvol %+v with size and volID", destDir)
+		glog.Infof("successfully created Gluster Subvol %+v with size and volID", destDir)
 	}
 
 	var gid *int
@@ -421,7 +421,7 @@ func (p *glusterSubvolProvisioner) Provision(options controller.VolumeOptions) (
 		}
 		gid = &allocate
 	}
-	glog.V(1).Infof("Allocated GID %d for PVC %s", *gid, options.PVC.Name)
+	glog.Infof("Allocated GID %d for PVC %s", *gid, options.PVC.Name)
 
 	// TODO: set quota? Not possible through standard tools, only gluster CLI?
 
@@ -528,7 +528,7 @@ func (p *glusterSubvolProvisioner) Delete(pv *v1.PersistentVolume) error {
 
 	subvolPath := p.makeSubvolPath(mountpoint, pv.Spec.ClaimRef.Namespace, pv.Spec.ClaimRef.UID)
 
-	glog.V(1).Infof("deleting volume, path %s", subvolPath)
+	glog.Infof("deleting volume, path %s", subvolPath)
 
 	_, err = os.Stat(subvolPath)
 	if err != nil {
@@ -540,7 +540,7 @@ func (p *glusterSubvolProvisioner) Delete(pv *v1.PersistentVolume) error {
 			return err
 		}
 	}
-	glog.V(2).Infof("PV %s deleted successfully", pv.Name)
+	glog.Infof("PV %s deleted successfully", pv.Name)
 
 	return nil
 }
