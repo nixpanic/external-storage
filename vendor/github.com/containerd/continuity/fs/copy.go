@@ -23,6 +23,7 @@ import (
 	"sync"
 
 	"github.com/pkg/errors"
+	"github.com/sirupsen/logrus"
 )
 
 var bufferPool = &sync.Pool{
@@ -32,17 +33,36 @@ var bufferPool = &sync.Pool{
 	},
 }
 
+// XAttrErrorHandlers transform a non-nil xattr error.
+// Return nil to ignore an error.
+// xattrKey can be empty for listxattr operation.
+type XAttrErrorHandler func(dst, src, xattrKey string, err error) error
+
 type copyDirOpts struct {
-	allowXAttrErrors bool
+	xeh XAttrErrorHandler
 }
 
 type CopyDirOpt func(*copyDirOpts) error
 
-func WithAllowXAttrErrors() CopyDirOpt {
+func WithXAttrErrorHandler(xeh XAttrErrorHandler) CopyDirOpt {
 	return func(o *copyDirOpts) error {
-		o.allowXAttrErrors = true
+		o.xeh = xeh
 		return nil
 	}
+}
+
+// WithAllowXAttrErrors allows ignoring xattr errors.
+// Ignored errors are logged with logrus.Warnf.
+func WithAllowXAttrErrors() CopyDirOpt {
+	xeh := func(dst, src, xattrKey string, err error) error {
+		if xattrKey == "" {
+			logrus.Warnf("ignoring xattr for %s (src=%s): %v", dst, src, err)
+		} else {
+			logrus.Warnf("ignoring xattr %s for %s (src=%s): %v", xattrKey, dst, src, err)
+		}
+		return nil
+	}
+	return WithXAttrErrorHandler(xeh)
 }
 
 // CopyDir copies the directory from src to dst.
@@ -130,7 +150,7 @@ func copyDirectory(dst, src string, inodes map[uint64]string, o *copyDirOpts) er
 			return errors.Wrap(err, "failed to copy file info")
 		}
 
-		if err := copyXAttrs(target, source, o.allowXAttrErrors); err != nil {
+		if err := copyXAttrs(target, source, o.xeh); err != nil {
 			return errors.Wrap(err, "failed to copy xattrs")
 		}
 	}

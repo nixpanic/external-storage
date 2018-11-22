@@ -39,9 +39,9 @@ required = [
   version = "1.7.3"
 
 [[constraint]]
-  branch = "ignore-xattr-errors"
+  branch = "xattr"
   name = "github.com/containerd/continuity"
-  source = "github.com/nixpanic/continuity"
+  source = "github.com/AkihiroSuda/continuity"
 
 [[constraint]]
   name = "github.com/digitalocean/godo"
