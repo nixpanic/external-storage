@@ -4,8 +4,8 @@
 [[projects]]
   name = "cloud.google.com/go"
   packages = ["compute/metadata"]
-  revision = "74b12019e2aa53ec27882158f59192d7cd6d1998"
-  version = "v0.33.1"
+  revision = "0ebda48a7f143b1cce9eb37a8c1106ac762a3430"
+  version = "v0.34.0"
 
 [[projects]]
   name = "github.com/asaskevich/govalidator"
@@ -25,6 +25,7 @@
     "aws/credentials",
     "aws/credentials/ec2rolecreds",
     "aws/credentials/endpointcreds",
+    "aws/credentials/processcreds",
     "aws/credentials/stscreds",
     "aws/csm",
     "aws/defaults",
@@ -54,8 +55,8 @@
     "service/elb",
     "service/sts"
   ]
-  revision = "66af558c91f83a793b4a0101f70742062982f611"
-  version = "v1.15.81"
+  revision = "c4e0e593d5f18b478f17ff0e86b56d41a70ced2d"
+  version = "v1.16.2"
 
 [[projects]]
   branch = "master"
@@ -64,15 +65,14 @@
   revision = "3a771d992973f24aa725d07868b467d1ddfceafb"
 
 [[projects]]
-  branch = "xattr"
+  branch = "master"
   name = "github.com/containerd/continuity"
   packages = [
     "fs",
     "syscallx",
     "sysx"
   ]
-  revision = "b83cbd2030ab0783e4504fbd67c49b628662c29a"
-  source = "github.com/AkihiroSuda/continuity"
+  revision = "004b46473808b3e7a4a3049c20e4376c91eb966d"
 
 [[projects]]
   name = "github.com/davecgh/go-spew"
@@ -89,8 +89,8 @@
 [[projects]]
   name = "github.com/digitalocean/godo"
   packages = ["."]
-  revision = "8f0fd9c1e6fcfcf8796099846451f8510f3b4acc"
-  version = "v1.7.0"
+  revision = "e85f1d337911645f87d08c7c9b4df98de8b710cd"
+  version = "v1.7.2"
 
 [[projects]]
   name = "github.com/docker/distribution"
@@ -165,8 +165,8 @@
     "proto",
     "sortkeys"
   ]
-  revision = "636bf0302bc95575d69441b25a2603156ffdddf1"
-  version = "v1.1.1"
+  revision = "4cbf7e384e768b4e01799441fdf2a706a5635ae7"
+  version = "v1.2.0"
 
 [[projects]]
   branch = "master"
@@ -260,7 +260,7 @@
     "openstack/utils",
     "pagination"
   ]
-  revision = "3a7818a07cfc862267a0b03635075a444c92dcda"
+  revision = "dd064e4da516dfe710fd7b8cf0bf4431dcfa4682"
 
 [[projects]]
   branch = "master"
@@ -328,7 +328,7 @@
 [[projects]]
   name = "github.com/jmespath/go-jmespath"
   packages = ["."]
-  revision = "0b12d6b5"
+  revision = "c2b33e84"
 
 [[projects]]
   name = "github.com/json-iterator/go"
@@ -364,7 +364,7 @@
   branch = "master"
   name = "github.com/miekg/dns"
   packages = ["."]
-  revision = "1c9c9bf4c93ee029810272d3e5b8a126aee5bf1f"
+  revision = "450ab7d57fb96d2a1d85cc507d30a91d00185dd4"
 
 [[projects]]
   name = "github.com/mitchellh/mapstructure"
@@ -439,8 +439,8 @@
     "prometheus/internal",
     "prometheus/promhttp"
   ]
-  revision = "abad2d1bd44235a26707c172eab6bca5bf2dbad3"
-  version = "v0.9.1"
+  revision = "505eaef017263e299324067d40ca2c48f6a2cf50"
+  version = "v0.9.2"
 
 [[projects]]
   branch = "master"
@@ -456,7 +456,7 @@
     "internal/bitbucket.org/ww/goautoneg",
     "model"
   ]
-  revision = "aeab699e26f4d4089dba5e522e5d9babd2adbaf7"
+  revision = "4724e9255275ce38f7179b2478abeae4e28c904f"
 
 [[projects]]
   branch = "master"
@@ -467,7 +467,7 @@
     "nfs",
     "xfs"
   ]
-  revision = "185b4288413d2a0dd0806f78c90dde719829e5ae"
+  revision = "1dc9a6cbc91aacc3e8b2d63db4d2e957a5394ac4"
 
 [[projects]]
   name = "github.com/sirupsen/logrus"
@@ -511,8 +511,8 @@
 [[projects]]
   name = "github.com/spf13/viper"
   packages = ["."]
-  revision = "2c12c60302a5a0e62ee102ca9bc996277c2f64f5"
-  version = "v1.2.1"
+  revision = "6d33b5a963d922d182c91e8a1c88d81fd150cfd4"
+  version = "v1.3.1"
 
 [[projects]]
   name = "github.com/stretchr/objx"
@@ -544,7 +544,7 @@
     "pbkdf2",
     "ssh/terminal"
   ]
-  revision = "3d3f9f413869b949e48070b5bc593aa22cc2b8f2"
+  revision = "505ab145d0a99da450461ae2c1a9f6cd10d1f447"
 
 [[projects]]
   branch = "master"
@@ -562,7 +562,7 @@
     "ipv4",
     "ipv6"
   ]
-  revision = "adae6a3d119ae4890b46832a2e88a95adc62b8e7"
+  revision = "610586996380ceef02dd726cc09df7e00a3f8e56"
 
 [[projects]]
   branch = "master"
@@ -574,7 +574,7 @@
     "jws",
     "jwt"
   ]
-  revision = "8f65e3013ebad444f13bc19536f7865efc793816"
+  revision = "d668ce993890a79bda886613ee587a69dd5da7a6"
 
 [[projects]]
   branch = "master"
@@ -589,7 +589,7 @@
     "unix",
     "windows"
   ]
-  revision = "0cf1ed9e522b7dbb416f080a5c8003de9b702bf4"
+  revision = "2a47403f2ae58167c4d75973960ccc62b28cb0d8"
 
 [[projects]]
   name = "golang.org/x/text"
@@ -628,7 +628,7 @@
     "googleapi",
     "googleapi/internal/uritemplates"
   ]
-  revision = "faade3cbb06a30202f2da53a8a5e3c4afe60b0c2"
+  revision = "1a5ef82f9af45ef51c486291ef2b0a16d82fdb95"
 
 [[projects]]
   name = "google.golang.org/appengine"
@@ -672,8 +672,8 @@
     "json",
     "jwt"
   ]
-  revision = "ef984e69dd356202fd4e4910d4d9c24468bdf0b8"
-  version = "v2.1.9"
+  revision = "72415094398e2f013bf50b76fd6de36df47938ea"
+  version = "v2.2.1"
 
 [[projects]]
   name = "gopkg.in/warnings.v0"
@@ -684,8 +684,8 @@
 [[projects]]
   name = "gopkg.in/yaml.v2"
   packages = ["."]
-  revision = "5420a8b6744d3b0345ab293f6fcba19c978f1183"
-  version = "v2.2.1"
+  revision = "51d6538a90f86fe93ac480b35f37b2be17fef232"
+  version = "v2.2.2"
 
 [[projects]]
   name = "k8s.io/api"
@@ -806,7 +806,7 @@
     "pkg/features",
     "pkg/util/feature"
   ]
-  revision = "e3c8fa95bba5a5ff9939a62c6ccd51ff3646b350"
+  revision = "bbe3b7124d2b63835a4e3f8907492e0ce52278ab"
 
 [[projects]]
   name = "k8s.io/client-go"
@@ -999,7 +999,7 @@
     "pkg/client/clientset/versioned/scheme",
     "pkg/client/clientset/versioned/typed/csi/v1alpha1"
   ]
-  revision = "b5848c3064d4c2dabd758a7fe0d45c7cbe3376bf"
+  revision = "61a1735c3f5028c6dd5dc37e0f5573d8872507ba"
 
 [[projects]]
   name = "k8s.io/klog"
@@ -1075,8 +1075,8 @@
     "pkg/volume/util/types",
     "pkg/volume/util/volumepathhandler"
   ]
-  revision = "17c77c7898218073f14c8d573582e8d2313dc740"
-  version = "v1.12.2"
+  revision = "435f92c719f279a3a67808c80521ea17d5715c66"
+  version = "v1.12.3"
 
 [[projects]]
   branch = "master"
@@ -1090,6 +1090,6 @@
 [solve-meta]
   analyzer-name = "dep"
   analyzer-version = 1
-  inputs-digest = "ffe562aae3507d1234c603d63cb28275a37c3a3bb0c875fcee4dd0c18755368d"
+  inputs-digest = "1aa470267b9010113a525f94988467af618ce18a922b795977336ab49ebe2509"
   solver-name = "gps-cdcl"
   solver-version = 1

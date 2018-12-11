@@ -79,15 +79,17 @@ spec:
         image: quay.io/nixpanic/k8s-external-storage:wip_gluster_subvol
         imagePullPolicy: Always
         volumeMounts:
-        - name: gluster-subvol-dev-fuse
-          mountPath: /dev/fuse
+        # /lib/modules is needed to load the fuse kernel module
+        - name: gluster-subvol-lib-modules
+          mountPath: /lib/modules
         securityContext:
           # capabilities do not seem to be sufficient, privileged needed :-/
+          # privileged also makes /dev available, no need to have it as a volume
           privileged: true
           #capabilities:
           #  # need to mount the supervol to create subdirs
           #  add: ["SYS_ADMIN"]
       volumes:
-      - name: gluster-subvol-dev-fuse
+      - name: gluster-subvol-lib-modules
         hostPath:
-          path: /dev/fuse
+          path: /lib/modules

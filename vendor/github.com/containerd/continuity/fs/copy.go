@@ -23,7 +23,6 @@ import (
 	"sync"
 
 	"github.com/pkg/errors"
-	"github.com/sirupsen/logrus"
 )
 
 var bufferPool = &sync.Pool{
@@ -44,6 +43,9 @@ type copyDirOpts struct {
 
 type CopyDirOpt func(*copyDirOpts) error
 
+// WithXAttrErrorHandler allows specifying XAttrErrorHandler
+// If nil XAttrErrorHandler is specified (default), CopyDir stops
+// on a non-nil xattr error.
 func WithXAttrErrorHandler(xeh XAttrErrorHandler) CopyDirOpt {
 	return func(o *copyDirOpts) error {
 		o.xeh = xeh
@@ -52,14 +54,8 @@ func WithXAttrErrorHandler(xeh XAttrErrorHandler) CopyDirOpt {
 }
 
 // WithAllowXAttrErrors allows ignoring xattr errors.
-// Ignored errors are logged with logrus.Warnf.
 func WithAllowXAttrErrors() CopyDirOpt {
 	xeh := func(dst, src, xattrKey string, err error) error {
-		if xattrKey == "" {
-			logrus.Warnf("ignoring xattr for %s (src=%s): %v", dst, src, err)
-		} else {
-			logrus.Warnf("ignoring xattr %s for %s (src=%s): %v", xattrKey, dst, src, err)
-		}
 		return nil
 	}
 	return WithXAttrErrorHandler(xeh)
