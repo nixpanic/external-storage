@@ -23,7 +23,9 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
+	"time"
 
 	"github.com/containerd/continuity/fs"
 	"github.com/golang/glog"
@@ -50,6 +52,7 @@ const (
 	parentPVCAnn       = "gluster.org/parentpvc"
 	gidAnn             = "pv.beta.kubernetes.io/gid"
 	workdir            = "/var/run/gluster-subvol"
+	unmountDelay       = "AUTO_UNMOUNT_DELAY"
 
 	// CloneRequestAnn is an annotation to request that the PVC be provisioned as a clone of the referenced PVC
 	CloneRequestAnn = "k8s.io/CloneRequest"
@@ -58,11 +61,25 @@ const (
 	CloneOfAnn = "k8s.io/CloneOf"
 )
 
+// glusterMountEntry is stored in the glusterSubvolProvisioner.mtab map.
+type glusterMountEntry struct {
+	mountpoint string
+        // timestamp of last access, for unmounting unused supervols
+	atime time.Time
+}
+
 type glusterSubvolProvisioner struct {
 	client    kubernetes.Interface
 	identity  string
 	allocator gidallocator.Allocator
-	mtab      map[string]string
+
+	// changes to the mtab map need to be done under mtabLock
+	mtabLock     *sync.Mutex
+	mtab         map[string]glusterMountEntry
+	mountTimeout int // expire mounted supervol PVs in ... seconds
+
+	// channel to stop the autoUnmounter go-routine
+	autoUnmounterC chan<- interface{}
 }
 
 var _ controller.Provisioner = &glusterSubvolProvisioner{}
@@ -73,13 +90,18 @@ var accessModes = []v1.PersistentVolumeAccessMode{
 	v1.ReadWriteOnce,
 }
 
-func newGlusterSubvolProvisioner(client kubernetes.Interface, id string) (controller.Provisioner, error) {
+func newGlusterSubvolProvisioner(client kubernetes.Interface, id string, timeout int) (controller.Provisioner, error) {
 	p := &glusterSubvolProvisioner{
-		client:    client,
-		identity:  id,
-		allocator: gidallocator.New(client),
-		mtab:      make(map[string]string),
+		client:       client,
+		identity:     id,
+		allocator:    gidallocator.New(client),
+		mtabLock:     &sync.Mutex{},
+		mtab:         make(map[string]glusterMountEntry),
+		mountTimeout: timeout,
 	}
+
+	// start the go routine to automatically unmount supervol PVs
+	p.autoUnmounter()
 
 	return p, nil
 }
@@ -110,17 +132,98 @@ func (p *glusterSubvolProvisioner) annotatePVC(ns, pvc string, updates map[strin
 	return nil
 }
 
+// unmount a path, return an error if unmounting fails
+func (p *glusterSubvolProvisioner) umount(mountpoint string) error {
+	umountCmd := exec.Command("/bin/umount", mountpoint)
+	glog.Infof("going to unmount: %s", umountCmd)
+	err := umountCmd.Run()
+	if err != nil {
+		glog.Errorf("failed to unmount: %s", err)
+		return err
+	}
+
+	return nil
+}
+
+// unmount the given PV, return an error if unmounting fails
+func (p *glusterSubvolProvisioner) umountPV(pv string) error {
+	// this whole function checks and potentially modifies mtab, lock it
+	p.mtabLock.Lock()
+	defer p.mtabLock.Unlock()
+
+	// check if the pv is mounted at all
+	mountentry, mounted := p.mtab[pv]
+	if !mounted {
+		return fmt.Errorf("can not unmount PV %s: not mounted", pv)
+	}
+
+	err := p.umount(mountentry.mountpoint)
+	if err != nil {
+		glog.Errorf("failed to unmount PV %s: %s", pv, err)
+		return err
+	}
+
+	return nil
+}
+
+func (p *glusterSubvolProvisioner) expireMounts() {
+	// this whole function checks and potentially modifies mtab, lock it
+	p.mtabLock.Lock()
+	defer p.mtabLock.Unlock()
+
+	// Time.Add() accepts negative values for subtracting
+	expireTime := time.Now().Add(time.Second * time.Duration(p.mountTimeout) * -1)
+
+	for pv, mountentry := range p.mtab {
+		// if the atime is before the expireTime, unmount it
+		if mountentry.atime.Before(expireTime) {
+			err := p.umount(mountentry.mountpoint)
+			if err != nil {
+				delete(p.mtab, pv)
+			}
+		}
+	}
+}
+
+// automatically unmount supervol PVs when they are not used anymore
+func (p *glusterSubvolProvisioner) autoUnmounter() {
+	// check for expired supervol PV mounts every 30 seconds
+        ticker := time.NewTicker(time.Second * 30)
+        c := make(chan interface{})
+        p.autoUnmounterC = c
+
+        go func() {
+                glog.Infof("starting autoUnmunter...")
+                defer ticker.Stop()
+                for {
+                        select {
+                        case <-c:
+                                glog.Infof("stopping autoUnmounter...")
+                                return
+                        case <-ticker.C:
+                                glog.Infof("autoUnmounter: checking for expired mountpoints")
+				p.expireMounts()
+                        }
+                }
+        }()
+}
+
 // mount the given PV if not mounted yet, return the mountpoint or an error
 func (p *glusterSubvolProvisioner) mountPV(ns string, pv *v1.PersistentVolume) (string, error) {
+	// this whole function checks and potentially modifies mtab, lock it
+	p.mtabLock.Lock()
+	defer p.mtabLock.Unlock()
+
 	// check if not mounted yet
-	mountpoint, mounted := p.mtab[pv.Name]
+	mountentry, mounted := p.mtab[pv.Name]
 	if mounted {
-		// mounted already
-		return mountpoint, nil
+		// mounted already, update the access time
+		mountentry.atime = time.Now()
+		return mountentry.mountpoint, nil
 	}
 
 	// create the missing mountpoint
-	mountpoint = workdir + "/" + pv.Name
+	mountpoint := workdir + "/" + pv.Name
 	sb, err := os.Stat(mountpoint)
 	if err != nil {
 		// mountpoint does not exist yet, create it
@@ -193,7 +296,10 @@ func (p *glusterSubvolProvisioner) mountPV(ns string, pv *v1.PersistentVolume) (
 		return "", fmt.Errorf("failed to mount supervol %s, process exited with %v", supervol, err)
 	}
 
-	p.mtab[pv.Name] = mountpoint
+	p.mtab[pv.Name] = glusterMountEntry{
+		mountpoint: mountpoint,
+		atime: time.Now(),
+	}
 
 	return mountpoint, nil
 }
@@ -585,6 +691,16 @@ func main() {
 		provName = *id
 	}
 
+	// Fetch the timeout for expiring supervol PV mounts
+	timeout := 900 // 15 minutes by default
+	timeoutEnv := os.Getenv(unmountDelay)
+	if timeoutEnv != "" {
+		timeout, err = strconv.Atoi(timeoutEnv)
+		if err != nil {
+			glog.Fatalf("invalid integer for %s (%s): %s", unmountDelay, timeoutEnv, err)
+		}
+	}
+
 	clientset, err := kubernetes.NewForConfig(config)
 	if err != nil {
 		glog.Fatalf("Failed to create client:%v", err)
@@ -598,7 +714,7 @@ func main() {
 	}
 
 	// Create the provisioner
-	glusterSubvolProvisioner, err := newGlusterSubvolProvisioner(clientset, provName)
+	glusterSubvolProvisioner, err := newGlusterSubvolProvisioner(clientset, provName, timeout)
 	if err != nil {
 		glog.Fatalf("Failed to instantiate the provisioned: %v", err)
 	}
