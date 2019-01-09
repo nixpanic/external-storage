@@ -135,7 +135,7 @@ func (p *glusterSubvolProvisioner) annotatePVC(ns, pvc string, updates map[strin
 // unmount a path, return an error if unmounting fails
 func (p *glusterSubvolProvisioner) umount(mountpoint string) error {
 	umountCmd := exec.Command("/bin/umount", mountpoint)
-	glog.Infof("going to unmount: %s", umountCmd)
+	glog.Infof("going to unmount: %s", mountpoint)
 	err := umountCmd.Run()
 	if err != nil {
 		glog.Errorf("failed to unmount: %s", err)
@@ -178,7 +178,7 @@ func (p *glusterSubvolProvisioner) expireMounts() {
 		// if the atime is before the expireTime, unmount it
 		if mountentry.atime.Before(expireTime) {
 			err := p.umount(mountentry.mountpoint)
-			if err != nil {
+			if err == nil {
 				delete(p.mtab, pv)
 			}
 		}
