@@ -201,7 +201,7 @@ func (p *glusterSubvolProvisioner) autoUnmounter() {
                                 glog.Infof("stopping autoUnmounter...")
                                 return
                         case <-ticker.C:
-                                glog.Infof("autoUnmounter: checking for expired mountpoints")
+                                glog.V(2).Infof("autoUnmounter: checking for expired mountpoints")
 				p.expireMounts()
                         }
                 }
