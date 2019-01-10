@@ -90,7 +90,7 @@ var accessModes = []v1.PersistentVolumeAccessMode{
 	v1.ReadWriteOnce,
 }
 
-func newGlusterSubvolProvisioner(client kubernetes.Interface, id string, timeout int) (controller.Provisioner, error) {
+func newGlusterSubvolProvisioner(client kubernetes.Interface, id string, timeout int) (controller.Provisioner, *glusterSubvolProvisioner, error) {
 	p := &glusterSubvolProvisioner{
 		client:       client,
 		identity:     id,
@@ -103,7 +103,7 @@ func newGlusterSubvolProvisioner(client kubernetes.Interface, id string, timeout
 	// start the go routine to automatically unmount supervol PVs
 	p.autoUnmounter()
 
-	return p, nil
+	return p, p, nil
 }
 
 func (p *glusterSubvolProvisioner) getPVC(ns string, name string) (*v1.PersistentVolumeClaim, error) {
@@ -143,6 +143,20 @@ func (p *glusterSubvolProvisioner) umount(mountpoint string) error {
 	}
 
 	return nil
+}
+
+// unmount all mounted supervols
+func (p *glusterSubvolProvisioner) umountAll() {
+	// this whole function modifies mtab, lock it
+	p.mtabLock.Lock()
+	defer p.mtabLock.Unlock()
+
+	for pv, mountentry := range p.mtab {
+		err := p.umount(mountentry.mountpoint)
+		if err == nil {
+			delete(p.mtab, pv)
+		}
+	}
 }
 
 // unmount the given PV, return an error if unmounting fails
@@ -714,10 +728,13 @@ func main() {
 	}
 
 	// Create the provisioner
-	glusterSubvolProvisioner, err := newGlusterSubvolProvisioner(clientset, provName, timeout)
+	glusterSubvolProvisioner, gsp, err := newGlusterSubvolProvisioner(clientset, provName, timeout)
 	if err != nil {
 		glog.Fatalf("Failed to instantiate the provisioned: %v", err)
 	}
+
+	// unmount all supervols when main() exits
+	defer gsp.umountAll()
 
 	// Start the provision controller
 	pc := controller.NewProvisionController(
@@ -727,6 +744,4 @@ func main() {
 		serverVersion.GitVersion,
 	)
 	pc.Run(wait.NeverStop)
-
-	// TODO: unmount the glusterSubvolProvisioner.mtab entries (now: let container cleanup handle it)
 }
