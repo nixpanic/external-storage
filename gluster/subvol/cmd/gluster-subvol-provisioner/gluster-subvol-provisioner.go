@@ -59,6 +59,10 @@ const (
 
 	// CloneOfAnn is an annotation to indicate that a PVC is a clone of the referenced PVC
 	CloneOfAnn = "k8s.io/CloneOf"
+
+	// status of cloning ("Started", "Failed", "Finished")
+	// TODO: make this a string-enum
+	cloneStatusAnn = "subvol.gluster.org/CloneStatus"
 )
 
 // glusterMountEntry is stored in the glusterSubvolProvisioner.mtab map.
@@ -376,6 +380,26 @@ func (p *glusterSubvolProvisioner) validateProvisionRequirements(pvcReq, supervo
 	return nil
 }
 
+func (p *glusterSubvolProvisioner) isCloning(pvc *v1.PersistentVolumeClaim) (bool) {
+	cloneStatus, ok := pvc.Annotations[cloneStatusAnn]
+	if !ok {
+		// no CloneStatus annotation
+		return false
+	}
+
+	switch cloneStatus {
+	case "Started":
+		glog.Infof("clone process for %s/%s has been started already", pvc.Namespace, pvc.Name)
+	case "Failed":
+		glog.Infof("clone process for %s/%s failed, restarting", pvc.Namespace, pvc.Name)
+		return false
+	case "Finished":
+		glog.Infof("clone process for %s/%s has finished, no need to retry", pvc.Namespace, pvc.Name)
+	}
+
+	return true
+}
+
 // Check if the PVC has a CloneRequest annotation and try to clone if it has.
 // This returns the source namespace/PVC that got cloned, an error if something fails.
 func (p *glusterSubvolProvisioner) tryClone(options controller.VolumeOptions, supervol *v1.PersistentVolumeClaim, mountpoint, destDir string, gid *int) (bool, error) {
@@ -404,6 +428,16 @@ func (p *glusterSubvolProvisioner) tryClone(options controller.VolumeOptions, su
 
 func (p *glusterSubvolProvisioner) doClone(options controller.VolumeOptions, supervolPVC *v1.PersistentVolumeClaim, sourcePVCRef, mountpoint, destDir string, gid *int) {
 	pvc := options.PVC
+
+	cloneStatus := map[string]string{
+		cloneStatusAnn: "Started",
+	}
+	_ = p.annotatePVC(pvc.Name, pvc.Namespace, cloneStatus)
+
+	cloneStatus[cloneStatusAnn] = "Failed"
+	defer func() {
+		_ = p.annotatePVC(pvc.Name, pvc.Namespace, cloneStatus)
+	}()
 
 	// sourcePVCRef is like (namespace/)?pvc
 	var sourceNS, sourcePVCName string
@@ -528,10 +562,17 @@ func (p *glusterSubvolProvisioner) doClone(options controller.VolumeOptions, sup
 	} else if err != nil {
 		glog.Errorf("failed to create PersistentVolume %s: %s", options.PVName, err)
 	}
+
+	cloneStatus[cloneStatusAnn] = "Finished"
 }
 
 // Provision creates a storage asset and returns a PV object representing it.
 func (p *glusterSubvolProvisioner) Provision(options controller.VolumeOptions) (*v1.PersistentVolume, error) {
+	// check if cloning is already initiated for this PVC
+	if p.isCloning(options.PVC) {
+		return nil, fmt.Errorf("PVC %s/%s is already getting provisioned", options.PVC.Namespace, options.PVC.Name)
+	}
+
 	var supervolNS, supervolPVCName string
 	gidAllocate := true
 	for k, v := range options.Parameters {
