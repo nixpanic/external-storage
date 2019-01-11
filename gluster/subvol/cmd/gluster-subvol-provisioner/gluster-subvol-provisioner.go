@@ -378,21 +378,32 @@ func (p *glusterSubvolProvisioner) validateProvisionRequirements(pvcReq, supervo
 
 // Check if the PVC has a CloneRequest annotation and try to clone if it has.
 // This returns the source namespace/PVC that got cloned, an error if something fails.
-func (p *glusterSubvolProvisioner) tryClone(pvc *v1.PersistentVolumeClaim, mountpoint, destDir string) (string, error) {
+func (p *glusterSubvolProvisioner) tryClone(options controller.VolumeOptions, supervol *v1.PersistentVolumeClaim, mountpoint, destDir string, gid *int) (bool, error) {
+	pvc := options.PVC
+
 	// sourcePVCRef points to the PVC that should get cloned
 	sourcePVCRef, ok := pvc.Annotations[CloneRequestAnn]
 	if !ok {
 		// no CloneRequest, no need to try and clone
 		glog.Infof("no %s annotation for PVC %s/%s, not going to clone", CloneRequestAnn, pvc.Namespace, pvc.Name)
-		return "", nil
+		return false, nil
 	}
 	if sourcePVCRef == "" {
 		// no CloneRequest, no need to try and clone
 		glog.Infof("annotation %s for PVC %s/%s is empty, not going to clone", CloneRequestAnn, pvc.Namespace, pvc.Name)
-		return "", nil
+		return false, nil
 	}
 
 	glog.Infof("got requested to clone %s for PVC %s/%s", sourcePVCRef, pvc.Namespace, pvc.Name)
+
+	// start doClone() in the background
+	go p.doClone(options, supervol, sourcePVCRef, mountpoint, destDir, gid)
+
+	return true, nil
+}
+
+func (p *glusterSubvolProvisioner) doClone(options controller.VolumeOptions, supervolPVC *v1.PersistentVolumeClaim, sourcePVCRef, mountpoint, destDir string, gid *int) {
+	pvc := options.PVC
 
 	// sourcePVCRef is like (namespace/)?pvc
 	var sourceNS, sourcePVCName string
@@ -405,21 +416,21 @@ func (p *glusterSubvolProvisioner) tryClone(pvc *v1.PersistentVolumeClaim, mount
 		sourceNS = parts[0]
 		sourcePVCName = parts[1]
 	} else {
-		return "", fmt.Errorf("failed to parse namespace/pvc from %s", sourcePVCRef)
+		glog.Errorf("failed to parse namespace/pvc from %s", sourcePVCRef)
 	}
 
 	// TODO: check if the size of the PVC >= source
 
 	sourcePVC, err := p.getPVC(sourceNS, sourcePVCName)
 	if err != nil {
-		return "", fmt.Errorf("failed to find PVC %s/%s: %s", sourceNS, sourcePVCName, err)
+		glog.Errorf("failed to find PVC %s/%s: %s", sourceNS, sourcePVCName, err)
 	}
 
 	// verify that the sourcePVC is on the supervolPVC
 	sourceDir := p.makeSubvolPath(mountpoint, sourceNS, sourcePVC.UID)
 	st, err := os.Stat(sourceDir)
 	if err != nil || !st.Mode().IsDir() {
-		return "", fmt.Errorf("failed to clone %s, path does not exist on supervol", sourcePVCRef)
+		glog.Errorf("failed to clone %s, path does not exist on supervol", sourcePVCRef)
 	}
 
 	// verification has been done!
@@ -433,13 +444,90 @@ func (p *glusterSubvolProvisioner) tryClone(pvc *v1.PersistentVolumeClaim, mount
 		// Delete destDir, partial clone? Fallthrough to normal Mkdir().
 		err = os.RemoveAll(destDir)
 		if err != nil {
-			return "", fmt.Errorf("failed to cleanup partially cloned %s/%s: %s", sourceNS, sourcePVCName, err)
+			glog.Errorf("failed to cleanup partially cloned %s/%s: %s", sourceNS, sourcePVCName, err)
+			// TODO: try to move partial cloned contents to some "junk" dir and continue?
+			return
 		}
-		return "", nil
+
+		err = os.MkdirAll(destDir, 0777)
+		if err != nil {
+			glog.Errorf("Failed to create subdir for new pvc %s: %s", options.PVC.Name, err)
+			return
+		}
+	} else {
+		glog.Infof("successfully cloned %s/%s for PVC %s/%s", sourceNS, sourcePVCName, pvc.Namespace, pvc.Name)
 	}
 
-	glog.Infof("successfully cloned %s/%s for PVC %s/%s", sourceNS, sourcePVCName, pvc.Namespace, pvc.Name)
-	return sourceNS + "/" + sourcePVCName, nil
+	// based on the PVC we can get the PV
+	supervolPV, err := p.client.CoreV1().PersistentVolumes().Get(supervolPVC.Spec.VolumeName, metav1.GetOptions{})
+	if err != nil {
+		glog.Errorf("could not find PV for PVC %s/%s", supervolPVC.Namespace, supervolPVC.Name)
+		return
+	}
+
+	// TODO: copied from Provision()
+
+	// TODO: set quota? Not possible through standard tools, only gluster CLI?
+
+	// subdir has been setup, create the PVC object
+	ep, err := p.copyEndpoints(supervolPVC.Namespace, supervolPV, options.PVC.Namespace, options.PVC.Name)
+	if err != nil {
+		glog.Errorf("failed to copy endpoint from supervol %s: %s", supervolPV.Name, err)
+		return
+	}
+
+	// TODO: glusterfile creates a Service for each PVC, is that really needed?
+
+	glusterfs := &v1.GlusterfsVolumeSource{
+		EndpointsName: ep.ObjectMeta.Name,
+		Path:          p.makeMountPath(supervolPV, options.PVC.Namespace, options.PVC.UID),
+		ReadOnly:      false,
+	}
+
+	mode := v1.PersistentVolumeFilesystem
+	pvSpec := v1.PersistentVolumeSpec{
+		PersistentVolumeReclaimPolicy: options.PersistentVolumeReclaimPolicy,
+		AccessModes:                   options.PVC.Spec.AccessModes,
+		MountOptions:                  supervolPV.Spec.MountOptions,
+		VolumeMode:                    &mode,
+		Capacity: v1.ResourceList{
+			v1.ResourceName(v1.ResourceStorage): options.PVC.Spec.Resources.Requests[v1.ResourceName(v1.ResourceStorage)],
+		},
+		PersistentVolumeSource: v1.PersistentVolumeSource{
+			Glusterfs: glusterfs,
+		},
+	}
+
+	pv := &v1.PersistentVolume{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: options.PVName,
+			Annotations: map[string]string{
+				gidAnn:         strconv.FormatInt(int64(*gid), 10),
+				glusterTypeAnn: "subvol",
+				parentPVCAnn:   supervolPVC.Namespace + "/" + supervolPVC.Name,
+				"Description":  descAnn,
+			},
+		},
+		Spec: pvSpec,
+	}
+
+	// sourcePVCRef will be empty if cloning failed
+	if sourcePVCRef != "" {
+		options.PVC.Annotations[CloneOfAnn] = sourcePVCRef
+		err = p.annotatePVC(options.PVC.Namespace, options.PVC.Name, options.PVC.Annotations)
+		if err != nil {
+			// TODO: retry or cleanup the cloned data?
+			glog.Errorf("cloning %s was successful, but setting the annotation on PVC %s/%s was not", sourcePVCRef, options.PVC.Namespace, options.PVC.Name)
+		}
+	}
+
+	// TODO: create the new PV in the API server
+	_, err = p.client.CoreV1().PersistentVolumes().Create(pv)
+	if err != nil && errors.IsAlreadyExists(err) {
+		glog.Infof("PersistentVolume %s already exist, that is ok", options.PVC.Name, options.PVC.Namespace)
+	} else if err != nil {
+		glog.Errorf("failed to create PersistentVolume %s: %s", options.PVName, err)
+	}
 }
 
 // Provision creates a storage asset and returns a PV object representing it.
@@ -519,22 +607,6 @@ func (p *glusterSubvolProvisioner) Provision(options controller.VolumeOptions) (
 	// full path of the directory for the new PV
 	destDir := p.makeSubvolPath(mountpoint, options.PVC.Namespace, options.PVC.UID)
 
-	// In case an error occurred during cloning, an empty PVC should be
-	// created. This is the same behaviour as provisioners that do not
-	// provide cloning support. The "k8s.io/CloneOf" annotation should only
-	// get set if cloning was successful.
-	sourcePVCRef, err := p.tryClone(options.PVC, mountpoint, destDir)
-	if err != nil || sourcePVCRef == "" {
-		if err != nil {
-			glog.Errorf("failed to clone, creating empty PVC %s/%s: %s", options.PVC.Namespace, options.PVC.Name, err)
-		}
-		err = os.MkdirAll(destDir, 0777)
-		if err != nil {
-			return nil, fmt.Errorf("Failed to create subdir for new pvc %s: %s", options.PVC.Name, err)
-		}
-		glog.Infof("successfully created Gluster Subvol %+v with size and volID", destDir)
-	}
-
 	var gid *int
 	if gidAllocate {
 		var allocate int // suggested by vetshadow, warning for 'allocate, err := ..'
@@ -545,6 +617,27 @@ func (p *glusterSubvolProvisioner) Provision(options controller.VolumeOptions) (
 		gid = &allocate
 	}
 	glog.Infof("Allocated GID %d for PVC %s", *gid, options.PVC.Name)
+
+	// In case an error occurred during cloning, an empty PVC should be
+	// created. This is the same behaviour as provisioners that do not
+	// provide cloning support. The "k8s.io/CloneOf" annotation should only
+	// get set if cloning was successful.
+	isCloning, err := p.tryClone(options, supervolPVC, mountpoint, destDir, gid)
+	if err != nil || !isCloning {
+		if err != nil {
+			glog.Errorf("failed to clone, creating empty PVC %s/%s: %s", options.PVC.Namespace, options.PVC.Name, err)
+		}
+		err = os.MkdirAll(destDir, 0777)
+		if err != nil {
+			return nil, fmt.Errorf("Failed to create subdir for new pvc %s: %s", options.PVC.Name, err)
+		}
+		glog.Infof("successfully created Gluster Subvol %+v with size and volID", destDir)
+	}
+
+	// when tryClone() started cloning in the background, return
+	if isCloning {
+		return nil, nil
+	}
 
 	// TODO: set quota? Not possible through standard tools, only gluster CLI?
 
@@ -587,16 +680,6 @@ func (p *glusterSubvolProvisioner) Provision(options controller.VolumeOptions) (
 			},
 		},
 		Spec: pvSpec,
-	}
-
-	// sourcePVCRef will be empty if there was no cloning request, or cloning failed
-	if sourcePVCRef != "" {
-		options.PVC.Annotations[CloneOfAnn] = sourcePVCRef
-		err = p.annotatePVC(options.PVC.Namespace, options.PVC.Name, options.PVC.Annotations)
-		if err != nil {
-			// TODO: retry or cleanup the cloned data?
-			glog.Errorf("cloning %s was successful, but setting the annotation on PVC %s/%s was not", sourcePVCRef, options.PVC.Namespace, options.PVC.Name)
-		}
 	}
 
 	return pv, nil
