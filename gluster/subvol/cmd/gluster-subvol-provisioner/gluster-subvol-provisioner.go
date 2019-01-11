@@ -38,8 +38,10 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
+	ref "k8s.io/client-go/tools/reference"
 	"k8s.io/client-go/util/retry"
 )
 
@@ -556,6 +558,15 @@ func (p *glusterSubvolProvisioner) doClone(options controller.VolumeOptions, sup
 	}
 
 	// TODO: create the new PV in the API server
+	// Prepare a claimRef to the claim early (to fail before a volume is
+	// provisioned)
+	claimRef, err := ref.GetReference(scheme.Scheme, pvc)
+	if err != nil {
+		glog.Error("unexpected error getting claim reference: %s", err)
+		return
+	}
+	pv.Spec.ClaimRef = claimRef
+
 	_, err = p.client.CoreV1().PersistentVolumes().Create(pv)
 	if err != nil && errors.IsAlreadyExists(err) {
 		glog.Infof("PersistentVolume %s already exist, that is ok", options.PVC.Name, options.PVC.Namespace)
