@@ -432,11 +432,11 @@ func (p *glusterSubvolProvisioner) doClone(options controller.VolumeOptions, sup
 	cloneStatus := map[string]string{
 		cloneStatusAnn: "Started",
 	}
-	_ = p.annotatePVC(pvc.Name, pvc.Namespace, cloneStatus)
+	_ = p.annotatePVC(pvc.Namespace, pvc.Name, cloneStatus)
 
 	cloneStatus[cloneStatusAnn] = "Failed"
 	defer func() {
-		_ = p.annotatePVC(pvc.Name, pvc.Namespace, cloneStatus)
+		_ = p.annotatePVC(pvc.Namespace, pvc.Name, cloneStatus)
 	}()
 
 	// sourcePVCRef is like (namespace/)?pvc
