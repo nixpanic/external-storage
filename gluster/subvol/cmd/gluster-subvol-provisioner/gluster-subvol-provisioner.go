@@ -636,7 +636,8 @@ func (p *glusterSubvolProvisioner) Provision(options controller.VolumeOptions) (
 
 	// when tryClone() started cloning in the background, return
 	if isCloning {
-		return nil, nil
+		// an error should be returned, the controller panics otherwise
+		return nil, fmt.Errorf("provisioning of PVC %s/%s continues in the background", options.PVC.Namespace, options.PVC.Name)
 	}
 
 	// TODO: set quota? Not possible through standard tools, only gluster CLI?
